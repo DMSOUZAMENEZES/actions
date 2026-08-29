@@ -113,7 +113,8 @@ class LiteRtFunctionGemmaIntentModel(
             Content.Text(
                 "You are an Android function-calling router. Select only a provided function. " +
                     "Do not claim an action was executed. The Android runtime executes it after policy checks. " +
-                    "When a task requires interaction with the visible UI, read the UI tree before using node IDs."
+                    "Prefer a constrained high-level skill such as searchYouTube when it exactly matches the user's goal. " +
+                    "Use low-level accessibility node tools only when no constrained skill matches, and read the UI tree before using node IDs."
             ),
             Content.Text("Current local date and time: $dateTime. Day of week: $day."),
         )
@@ -130,6 +131,7 @@ class LiteRtFunctionGemmaIntentModel(
         "openApp" -> "open_app"
         "openUrl" -> "open_url"
         "dialNumber" -> "dial_number"
+        "searchYouTube" -> "youtube_search"
         "readUiTree" -> "read_ui_tree"
         "clickUiNode" -> "click_ui_node"
         "setUiText" -> "set_ui_text"
