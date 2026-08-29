@@ -119,8 +119,14 @@ class LiteRtFunctionGemmaIntentModel(
     }
 
     private fun String.toRuntimeToolName(): String = when (this) {
-        "openApp" -> "open_app"
+        "turnOnFlashlight" -> "flashlight_on"
+        "turnOffFlashlight" -> "flashlight_off"
+        "createContact" -> "create_contact"
+        "sendEmail" -> "send_email"
+        "showLocationOnMap" -> "show_location_on_map"
         "openWifiSettings" -> "open_wifi_settings"
+        "createCalendarEvent" -> "create_calendar_event"
+        "openApp" -> "open_app"
         "openUrl" -> "open_url"
         "dialNumber" -> "dial_number"
         else -> this
