@@ -10,10 +10,10 @@ object RuntimeToolCatalog {
         register(
             RegisteredTool(
                 name = "open_app",
-                description = "Open an installed Android application by package name.",
+                description = "Open an installed Android application by human-readable app name or package name.",
             )
         ) { args ->
-            OpenAppAction(packageName = args.required("packageName"))
+            OpenAppAction(appName = args.required("appName"))
         }
 
         register(
