@@ -1,5 +1,7 @@
 package com.dmsouzamenezes.actions.app
 
+import android.Manifest
+import android.content.pm.PackageManager
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -13,6 +15,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.weight
 import androidx.compose.material3.Button
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
@@ -30,6 +33,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
 import com.dmsouzamenezes.actions.runtime.ActionPlan
 import com.dmsouzamenezes.actions.runtime.ActionResult
 import com.dmsouzamenezes.actions.runtime.AndroidFunctionRuntimeSession
@@ -72,9 +76,26 @@ private fun RuntimeDemoScreen() {
     var modelReady by remember { mutableStateOf(modelFile.exists()) }
     var pendingPlan by remember { mutableStateOf<ActionPlan?>(null) }
     var session by remember { mutableStateOf<AndroidFunctionRuntimeSession?>(null) }
+    var cameraGranted by remember {
+        mutableStateOf(
+            ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) ==
+                PackageManager.PERMISSION_GRANTED
+        )
+    }
 
     DisposableEffect(Unit) {
         onDispose { session?.close() }
+    }
+
+    val cameraPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        cameraGranted = granted
+        status = if (granted) {
+            "Permissão de câmera concedida; a lanterna pode ser controlada."
+        } else {
+            "Permissão de câmera negada; comandos de lanterna retornarão erro de permissão."
+        }
     }
 
     val modelPicker = rememberLauncherForActivityResult(
@@ -126,11 +147,27 @@ private fun RuntimeDemoScreen() {
                 "o runtime aplica política e executa a ação Android."
         )
 
-        OutlinedButton(
-            onClick = { modelPicker.launch(arrayOf("*/*")) },
-            enabled = !busy,
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            Text(if (modelReady) "Trocar modelo .litertlm" else "Selecionar modelo .litertlm")
+            OutlinedButton(
+                onClick = { modelPicker.launch(arrayOf("*/*")) },
+                enabled = !busy,
+                modifier = Modifier.weight(1f),
+            ) {
+                Text(if (modelReady) "Trocar modelo" else "Selecionar modelo")
+            }
+
+            if (!cameraGranted) {
+                OutlinedButton(
+                    onClick = { cameraPermissionLauncher.launch(Manifest.permission.CAMERA) },
+                    enabled = !busy,
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Text("Permitir lanterna")
+                }
+            }
         }
 
         Text(status, style = MaterialTheme.typography.bodySmall)
