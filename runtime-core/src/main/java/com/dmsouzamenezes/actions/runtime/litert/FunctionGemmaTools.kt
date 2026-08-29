@@ -76,6 +76,11 @@ internal class FunctionGemmaTools : ToolSet {
         phoneNumber: String,
     ): Map<String, String> = mapOf("phoneNumber" to phoneNumber)
 
+    @Tool(description = "Opens YouTube and performs a search for the requested query using the constrained UI automation skill.")
+    fun searchYouTube(
+        @ToolParam(description = "The text to search for on YouTube.") query: String,
+    ): Map<String, String> = mapOf("query" to query)
+
     @Tool(description = "Reads the currently visible Android accessibility UI tree and returns semantic node IDs.")
     fun readUiTree(): Map<String, String> = mapOf("result" to "pending")
 
