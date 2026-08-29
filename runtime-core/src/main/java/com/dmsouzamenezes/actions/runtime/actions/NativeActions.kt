@@ -18,20 +18,29 @@ data class OpenAppAction(
         val packageManager = context.androidContext.packageManager
         val trimmed = appName.trim()
 
-        val packageName = packageManager.getLaunchIntentForPackage(trimmed)?.let { trimmed }
-            ?: packageManager.getInstalledApplications(0)
+        val directIntent = packageManager.getLaunchIntentForPackage(trimmed)
+        val resolvedPackage = if (directIntent != null) {
+            trimmed
+        } else {
+            val launcherQuery = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
+            packageManager.queryIntentActivities(launcherQuery, 0)
                 .asSequence()
-                .mapNotNull { applicationInfo ->
-                    val label = packageManager.getApplicationLabel(applicationInfo).toString()
-                    if (label.equals(trimmed, ignoreCase = true)) applicationInfo.packageName else null
+                .firstOrNull { resolveInfo ->
+                    val label = resolveInfo.loadLabel(packageManager).toString()
+                    label.equals(trimmed, ignoreCase = true) ||
+                        resolveInfo.activityInfo.packageName.equals(trimmed, ignoreCase = true)
                 }
-                .firstOrNull()
+                ?.activityInfo
+                ?.packageName
+        }
+
+        val packageName = resolvedPackage
             ?: return ActionResult.Failure(
                 code = "app_not_installed",
-                message = "Application not installed or not found: $appName",
+                message = "Application not installed or not visible: $appName",
             )
 
-        val intent = packageManager.getLaunchIntentForPackage(packageName)
+        val intent = directIntent ?: packageManager.getLaunchIntentForPackage(packageName)
             ?: return ActionResult.Failure(
                 code = "app_not_launchable",
                 message = "Application cannot be launched: $appName",
