@@ -13,13 +13,13 @@ import com.google.ai.edge.litertlm.ToolSet
  */
 internal class FunctionGemmaTools : ToolSet {
 
-    @Tool(description = "Opens an installed Android application by its package name.")
+    @Tool(description = "Opens an installed Android application by its human-readable app name or package name.")
     fun openApp(
         @ToolParam(
-            description = "Android package name, for example com.google.android.youtube."
+            description = "Application name such as YouTube, WhatsApp or Chrome, or an Android package name."
         )
-        packageName: String,
-    ): Map<String, String> = mapOf("packageName" to packageName)
+        appName: String,
+    ): Map<String, String> = mapOf("appName" to appName)
 
     @Tool(description = "Opens the Android Wi-Fi settings screen.")
     fun openWifiSettings(): Map<String, String> = mapOf("result" to "pending")
