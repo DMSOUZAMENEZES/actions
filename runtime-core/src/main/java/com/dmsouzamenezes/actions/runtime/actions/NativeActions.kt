@@ -9,22 +9,46 @@ import com.dmsouzamenezes.actions.runtime.ActionRisk
 import com.dmsouzamenezes.actions.runtime.AndroidAction
 
 data class OpenAppAction(
-    val packageName: String,
+    val appName: String,
 ) : AndroidAction {
     override val id: String = "open_app"
     override val risk: ActionRisk = ActionRisk.SAFE
 
     override suspend fun execute(context: ActionContext): ActionResult {
-        val intent = context.androidContext.packageManager
-            .getLaunchIntentForPackage(packageName)
+        val packageManager = context.androidContext.packageManager
+        val trimmed = appName.trim()
+
+        val packageName = packageManager.getLaunchIntentForPackage(trimmed)?.let { trimmed }
+            ?: packageManager.getInstalledApplications(0)
+                .asSequence()
+                .mapNotNull { applicationInfo ->
+                    val label = packageManager.getApplicationLabel(applicationInfo).toString()
+                    if (label.equals(trimmed, ignoreCase = true)) applicationInfo.packageName else null
+                }
+                .firstOrNull()
             ?: return ActionResult.Failure(
                 code = "app_not_installed",
-                message = "Application not installed: $packageName",
+                message = "Application not installed or not found: $appName",
             )
 
-        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        context.androidContext.startActivity(intent)
-        return ActionResult.Success(data = mapOf("package" to packageName))
+        val intent = packageManager.getLaunchIntentForPackage(packageName)
+            ?: return ActionResult.Failure(
+                code = "app_not_launchable",
+                message = "Application cannot be launched: $appName",
+            )
+
+        return runCatching {
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            context.androidContext.startActivity(intent)
+            ActionResult.Success(
+                data = mapOf(
+                    "app_name" to appName,
+                    "package" to packageName,
+                )
+            )
+        }.getOrElse {
+            ActionResult.Failure("intent_failed", it.message ?: "Failed to open application", it)
+        }
     }
 }
 
