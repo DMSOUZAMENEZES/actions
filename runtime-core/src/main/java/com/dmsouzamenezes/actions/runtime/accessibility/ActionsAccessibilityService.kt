@@ -1,6 +1,7 @@
 package com.dmsouzamenezes.actions.runtime.accessibility
 
 import android.accessibilityservice.AccessibilityService
+import android.os.Build
 import android.os.Bundle
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
@@ -60,6 +61,20 @@ class ActionsAccessibilityService : AccessibilityService() {
                     )
                 }
                 node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+            } finally {
+                node.recycleSafely()
+            }
+        } ?: false
+
+    fun submitText(nodeId: String): Boolean =
+        findNode(nodeId)?.let { node ->
+            try {
+                if (!node.isEnabled) return false
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                    node.performAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_IME_ENTER.id)
+                } else {
+                    false
+                }
             } finally {
                 node.recycleSafely()
             }
@@ -134,6 +149,8 @@ object AccessibilityRuntimeBridge {
     fun clickNode(nodeId: String): Boolean = service?.clickNode(nodeId) == true
 
     fun setText(nodeId: String, text: String): Boolean = service?.setText(nodeId, text) == true
+
+    fun submitText(nodeId: String): Boolean = service?.submitText(nodeId) == true
 
     fun scrollForward(nodeId: String): Boolean = service?.scrollForward(nodeId) == true
 
