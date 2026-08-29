@@ -1,8 +1,10 @@
 package com.dmsouzamenezes.actions.app
 
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Bundle
+import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -38,6 +40,7 @@ import com.dmsouzamenezes.actions.runtime.ActionResult
 import com.dmsouzamenezes.actions.runtime.AndroidFunctionRuntimeSession
 import com.dmsouzamenezes.actions.runtime.FunctionGemmaRuntimeFactory
 import com.dmsouzamenezes.actions.runtime.PlanningResult
+import com.dmsouzamenezes.actions.runtime.accessibility.AccessibilityRuntimeBridge
 import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -167,6 +170,25 @@ private fun RuntimeDemoScreen() {
                     Text("Permitir lanterna")
                 }
             }
+        }
+
+        OutlinedButton(
+            onClick = {
+                context.startActivity(
+                    Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                )
+            },
+            enabled = !busy,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Text(
+                if (AccessibilityRuntimeBridge.isConnected) {
+                    "Acessibilidade conectada"
+                } else {
+                    "Ativar automação por acessibilidade"
+                }
+            )
         }
 
         Text(status, style = MaterialTheme.typography.bodySmall)
