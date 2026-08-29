@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="actions_accessibility_service_description">Allows the Actions Runtime to inspect and interact with the visible Android UI after explicit user enablement.</string>
+</resources>
