@@ -14,17 +14,17 @@ User command
    -> AndroidAction
    -> PolicyEngine
    -> ActionDispatcher
-   -> Android API / Intent
+   -> Android API / Intent / AccessibilityService
 ```
 
 LiteRT-LM automatic tool execution is disabled. The language model is responsible only for function selection and argument extraction. Android execution occurs after the runtime has converted the tool call into a typed action and evaluated its risk policy.
 
 ## Implemented tools
 
-The runtime currently supports the complete function set used by Google's MobileActions-270M demo plus three runtime extensions:
+The runtime supports the MobileActions-270M function set plus runtime extensions:
 
 - `flashlight_on` / `flashlight_off` — controls the torch with explicit Android CAMERA permission handling.
-- `create_contact` — opens Android contact creation with the extracted contact fields; confirmation required.
+- `create_contact` — opens Android contact creation with extracted contact fields; confirmation required.
 - `send_email` — prepares an email draft; confirmation required.
 - `show_location_on_map` — opens a named place, business or address in a map handler.
 - `open_wifi_settings` — opens Android Wi-Fi settings.
@@ -33,9 +33,49 @@ The runtime currently supports the complete function set used by Google's Mobile
 - `open_url` — opens an absolute URL.
 - `dial_number` — opens the dialer with the number filled in; confirmation required.
 
+## Accessibility runtime
+
+The runtime now contains an explicit Android `AccessibilityService` layer for visible-UI automation. It is disabled until the user enables it from Android Accessibility settings.
+
+The service exposes a semantic UI snapshot instead of screenshots. Each visible node receives a path-like ID such as `0.2.1` and includes text, content description, view ID, class, bounds and interaction capabilities.
+
+Low-level tools currently available:
+
+- `read_ui_tree` — reads the active accessibility tree and returns semantic node IDs.
+- `click_ui_node` — clicks a semantic node; confirmation required because arbitrary clicks can have external effects.
+- `set_ui_text` — enters text in an editable node; confirmation required for the generic primitive.
+- `scroll_ui_forward` — scrolls a semantic node.
+- `accessibility_back` — performs Android Back.
+
+These generic primitives are intentionally conservative. High-level skills can be safer because their behavior is constrained to a known task.
+
+## First multi-step skill: YouTube search
+
+`youtube_search(query)` is the first constrained skill. It performs:
+
+```text
+open YouTube
+   -> wait for the YouTube accessibility tree
+   -> locate Search semantically
+   -> activate Search
+   -> locate the editable query field
+   -> enter the query
+   -> submit through IME or a semantic search control
+```
+
+This skill is classified `SAFE` because it is limited to navigation and search and does not publish, send, purchase, delete or otherwise commit external state. The generic click/text tools remain confirmation-gated.
+
+Example goal:
+
+```text
+Abra o YouTube e pesquise Google AI Edge
+```
+
+FunctionGemma is instructed to prefer `youtube_search` over arbitrary low-level UI operations when the goal matches the constrained skill.
+
 ## Demo app
 
-The `app` module provides a Jetpack Compose test UI. It can import a `.litertlm` model through the Android document picker, copy it into app-private storage, request the camera permission used for flashlight actions, run an on-device command, and retain the planned action while asking for confirmation when necessary.
+The `app` module provides a Jetpack Compose test UI. It can import a `.litertlm` model through the Android document picker, copy it into app-private storage, request the camera permission used for flashlight actions, open Android Accessibility settings, run an on-device command, and retain the planned action while asking for confirmation when necessary.
 
 Recommended model for the current milestone:
 
@@ -61,11 +101,13 @@ Pinning LiteRT-LM is intentional. Using `latest.release` can resolve a newer AAR
 
 Actions are classified as `SAFE`, `SENSITIVE`, or `DESTRUCTIVE`. Sensitive and destructive actions require explicit confirmation before execution. Planning and execution are separate, so confirmation does not require a second LLM inference and the action shown to the user is the exact action that will later execute.
 
+The accessibility layer does not silently grant itself access. Android requires explicit user enablement of the service. Generic arbitrary UI input is not treated as automatically safe; constrained skills are preferred so permissions and policy can be tied to a specific outcome.
+
 ## Next milestones
 
-1. Add alarms, timers, sharing, media controls and read-only device-state tools.
-2. Add structured parameter metadata to the dynamic ToolRegistry.
-3. Add AccessibilityService and semantic UI-tree inspection.
-4. Add multi-step Skills such as YouTube search and WhatsApp message preparation.
+1. Stabilize CI and add unit/instrumentation coverage for accessibility snapshots and policy boundaries.
+2. Add a constrained WhatsApp `prepare_message` skill that stops before sending.
+3. Add a separate confirmation-gated `send_prepared_message` step.
+4. Add alarms, timers, sharing, media controls and read-only device-state tools.
 5. Add model download, integrity verification and device compatibility checks.
-6. Add unit/instrumentation tests for tool routing, policy decisions and action execution boundaries.
+6. Add a reusable Skill Engine and skill execution trace for multi-step automations.
