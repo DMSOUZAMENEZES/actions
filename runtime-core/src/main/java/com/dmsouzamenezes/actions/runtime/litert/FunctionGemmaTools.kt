@@ -75,4 +75,30 @@ internal class FunctionGemmaTools : ToolSet {
         @ToolParam(description = "Phone number to place in the dialer.")
         phoneNumber: String,
     ): Map<String, String> = mapOf("phoneNumber" to phoneNumber)
+
+    @Tool(description = "Reads the currently visible Android accessibility UI tree and returns semantic node IDs.")
+    fun readUiTree(): Map<String, String> = mapOf("result" to "pending")
+
+    @Tool(description = "Clicks a visible Android UI element using a node ID returned by readUiTree.")
+    fun clickUiNode(
+        @ToolParam(description = "Semantic node ID such as 0.2.1 from readUiTree.") nodeId: String,
+        @ToolParam(description = "Optional human-readable label for the target element.") label: String? = null,
+    ): Map<String, String> = mapOf(
+        "nodeId" to nodeId,
+        "label" to label.orEmpty(),
+    )
+
+    @Tool(description = "Sets text in an editable Android UI element using a node ID returned by readUiTree.")
+    fun setUiText(
+        @ToolParam(description = "Semantic node ID such as 0.3.0 from readUiTree.") nodeId: String,
+        @ToolParam(description = "Text to enter into the UI field.") text: String,
+    ): Map<String, String> = mapOf("nodeId" to nodeId, "text" to text)
+
+    @Tool(description = "Scrolls a scrollable Android UI element forward using a node ID returned by readUiTree.")
+    fun scrollUiForward(
+        @ToolParam(description = "Semantic node ID of a scrollable element.") nodeId: String,
+    ): Map<String, String> = mapOf("nodeId" to nodeId)
+
+    @Tool(description = "Performs the Android Back action through the accessibility service.")
+    fun accessibilityBack(): Map<String, String> = mapOf("result" to "pending")
 }
