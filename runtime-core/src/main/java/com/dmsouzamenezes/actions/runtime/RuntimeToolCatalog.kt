@@ -14,6 +14,7 @@ import com.dmsouzamenezes.actions.runtime.actions.SendEmailAction
 import com.dmsouzamenezes.actions.runtime.actions.SetFlashlightAction
 import com.dmsouzamenezes.actions.runtime.actions.SetUiTextAction
 import com.dmsouzamenezes.actions.runtime.actions.ShowLocationOnMapAction
+import com.dmsouzamenezes.actions.runtime.actions.YouTubeSearchAction
 
 object RuntimeToolCatalog {
     fun createDefault(): ToolRegistry = ToolRegistry().apply {
@@ -79,6 +80,15 @@ object RuntimeToolCatalog {
             )
         ) { args ->
             DialNumberAction(phoneNumber = args.required("phoneNumber"))
+        }
+
+        register(
+            RegisteredTool(
+                name = "youtube_search",
+                description = "Open YouTube, enter a search query and submit the search using the accessibility skill runtime.",
+            )
+        ) { args ->
+            YouTubeSearchAction(query = args.required("query"))
         }
 
         register(
