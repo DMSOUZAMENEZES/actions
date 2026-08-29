@@ -15,8 +15,10 @@ import com.google.ai.edge.litertlm.SamplerConfig
 import com.google.ai.edge.litertlm.tool
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 
 /**
  * On-device intent model backed by LiteRT-LM + FunctionGemma/MobileActions.
@@ -45,7 +47,9 @@ class LiteRtFunctionGemmaIntentModel(
         if (initialized) return
         initMutex.withLock {
             if (!initialized) {
-                engine.initialize()
+                withContext(Dispatchers.Default) {
+                    engine.initialize()
+                }
                 initialized = true
             }
         }
@@ -69,30 +73,34 @@ class LiteRtFunctionGemmaIntentModel(
             ),
         )
 
-        return engine.createConversation(conversationConfig).use { conversation ->
-            val response = conversation.sendMessage(request.text)
-            val toolCall = response.toolCalls.firstOrNull()
+        return withContext(Dispatchers.Default) {
+            engine.createConversation(conversationConfig).use { conversation ->
+                val response = conversation.sendMessage(request.text)
+                val toolCall = response.toolCalls.firstOrNull()
 
-            if (toolCall == null) {
-                return@use ModelDecision.NoAction(response.toString())
-            }
+                if (toolCall == null) {
+                    return@use ModelDecision.NoAction(response.toString())
+                }
 
-            val runtimeName = toolCall.name.toRuntimeToolName()
-            if (runtimeName !in allowedTools) {
-                return@use ModelDecision.NoAction(
-                    "Model requested unavailable tool: ${toolCall.name}"
+                val runtimeName = toolCall.name.toRuntimeToolName()
+                if (runtimeName !in allowedTools) {
+                    return@use ModelDecision.NoAction(
+                        "Model requested unavailable tool: ${toolCall.name}"
+                    )
+                }
+
+                ModelDecision.ToolCall(
+                    name = runtimeName,
+                    arguments = toolCall.arguments.mapValues { (_, value) -> value?.toString().orEmpty() },
                 )
             }
-
-            ModelDecision.ToolCall(
-                name = runtimeName,
-                arguments = toolCall.arguments.mapValues { (_, value) -> value?.toString().orEmpty() },
-            )
         }
     }
 
     override fun close() {
-        engine.close()
+        if (engine.isInitialized()) {
+            engine.close()
+        }
         initialized = false
     }
 
