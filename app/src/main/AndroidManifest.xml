@@ -4,7 +4,7 @@
         android:allowBackup="true"
         android:label="Actions Runtime"
         android:supportsRtl="true"
-        android:theme="@style/Theme.ActionsRuntime">
+        android:theme="@android:style/Theme.Material.Light.NoActionBar">
         <activity
             android:name=".MainActivity"
             android:exported="true">
