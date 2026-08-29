@@ -22,7 +22,7 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: "8.9"
+          gradle-version: "9.2.1"
 
       - name: Build runtime and demo app
         run: gradle --stacktrace :runtime-core:assembleDebug :app:assembleDebug
