@@ -4,7 +4,6 @@ import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Bundle
-import android.provider.OpenableColumns
 import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -27,6 +26,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -45,12 +45,8 @@ import com.dmsouzamenezes.actions.runtime.PendingAgentRun
 import com.dmsouzamenezes.actions.runtime.accessibility.AccessibilityRuntimeBridge
 import com.dmsouzamenezes.actions.runtime.actions.OpenWifiSettingsAction
 import java.io.File
-import java.io.FileInputStream
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 
-private const val MODEL_FILE_NAME = "mobile_actions_q8_ekv1024.litertlm"
 private const val MAX_AGENT_STEPS = 8
 
 class MainActivity : ComponentActivity() {
@@ -70,18 +66,14 @@ class MainActivity : ComponentActivity() {
 private fun RuntimeDemoScreen() {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val modelFile = remember(context) { File(context.filesDir, MODEL_FILE_NAME) }
+    val modelFile = remember(context) { File(context.filesDir, ModelDownloader.MODEL_FILE_NAME) }
 
-    var prompt by remember { mutableStateOf("Abra as configurações do Wi-Fi") }
-    var status by remember {
-        mutableStateOf(
-            if (modelFile.exists()) "Modelo encontrado. Use Trocar modelo se precisar substituir."
-            else "Selecione o arquivo $MODEL_FILE_NAME"
-        )
-    }
-    var diagnostics by remember { mutableStateOf("Diagnóstico: aguardando teste.") }
+    var prompt by remember { mutableStateOf("Abra o WhatsApp, leia a conversa e faça um resumo") }
+    var status by remember { mutableStateOf("Verificando modelo FunctionGemma...") }
+    var diagnostics by remember { mutableStateOf("Diagnóstico: inicializando.") }
     var busy by remember { mutableStateOf(false) }
-    var modelReady by remember { mutableStateOf(modelFile.exists()) }
+    var downloadingModel by remember { mutableStateOf(false) }
+    var modelReady by remember { mutableStateOf(ModelDownloader.isValidModel(modelFile)) }
     var pendingAgent by remember { mutableStateOf<PendingAgentRun?>(null) }
     var session by remember { mutableStateOf<AndroidFunctionRuntimeSession?>(null) }
     var cameraGranted by remember {
@@ -91,18 +83,59 @@ private fun RuntimeDemoScreen() {
         )
     }
 
-    DisposableEffect(Unit) {
-        onDispose {
-            pendingAgent?.close()
-            session?.close()
+    fun closeRuntimeSession() {
+        pendingAgent?.close()
+        pendingAgent = null
+        session?.close()
+        session = null
+    }
+
+    suspend fun downloadModel(force: Boolean) {
+        downloadingModel = true
+        busy = true
+        modelReady = false
+        status = if (force) {
+            "Baixando novamente o FunctionGemma (~284 MB)..."
+        } else {
+            "Baixando FunctionGemma automaticamente (~284 MB)..."
         }
+        diagnostics = "Fonte: LiteRT Community / mobile_actions_q8_ekv1024.litertlm"
+
+        runCatching {
+            ModelDownloader.ensureModel(context.applicationContext, force = force)
+        }.onSuccess { file ->
+            closeRuntimeSession()
+            modelReady = true
+            status = "Modelo pronto. O agente pode ser executado."
+            diagnostics = "Modelo validado: ${file.length()} bytes; acessibilidade=${AccessibilityRuntimeBridge.isConnected}"
+        }.onFailure { error ->
+            modelReady = ModelDownloader.isValidModel(modelFile)
+            status = "Falha ao baixar o modelo: ${error.message}"
+            diagnostics = "${error::class.java.simpleName}. Verifique internet e toque em Baixar modelo novamente."
+        }
+
+        downloadingModel = false
+        busy = false
+    }
+
+    LaunchedEffect(Unit) {
+        if (ModelDownloader.isValidModel(modelFile)) {
+            modelReady = true
+            status = "Modelo FunctionGemma encontrado e validado."
+            diagnostics = "Modelo: ${modelFile.length()} bytes; acessibilidade=${AccessibilityRuntimeBridge.isConnected}"
+        } else {
+            downloadModel(force = false)
+        }
+    }
+
+    DisposableEffect(Unit) {
+        onDispose { closeRuntimeSession() }
     }
 
     fun renderAgentResult(result: AgentRunResult) {
         when (result) {
             is AgentRunResult.Completed -> {
                 pendingAgent = null
-                val steps = result.trace.size
                 val traceText = if (result.trace.isEmpty()) {
                     "nenhuma ferramenta executada"
                 } else {
@@ -116,18 +149,17 @@ private fun RuntimeDemoScreen() {
                     }
                 }
                 diagnostics = "Trace: $traceText"
-                status = if (result.response.isBlank()) {
-                    "Tarefa concluída em $steps etapa(s)."
-                } else {
-                    "Tarefa concluída em $steps etapa(s): ${result.response}"
-                }
+                status = result.response.ifBlank { "Tarefa concluída." }
             }
+
             is AgentRunResult.ConfirmationRequired -> {
                 pendingAgent = result.pending
                 diagnostics = "Trace antes da confirmação: " +
-                    if (result.trace.isEmpty()) "nenhuma ferramenta concluída" else result.trace.joinToString(" → ") { it.tool }
+                    if (result.trace.isEmpty()) "nenhuma ferramenta concluída"
+                    else result.trace.joinToString(" → ") { it.tool }
                 status = "Confirmação necessária: ${result.summary}"
             }
+
             is AgentRunResult.Failure -> {
                 pendingAgent = null
                 diagnostics = "Falha do agente: ${result.code}; trace=" +
@@ -148,79 +180,8 @@ private fun RuntimeDemoScreen() {
         }
     }
 
-    val modelPicker = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.OpenDocument()
-    ) { uri ->
-        if (uri == null) return@rememberLauncherForActivityResult
-
-        scope.launch {
-            busy = true
-            status = "Validando modelo LiteRT-LM..."
-            val imported = runCatching {
-                withContext(Dispatchers.IO) {
-                    val displayName = context.contentResolver.query(
-                        uri,
-                        arrayOf(OpenableColumns.DISPLAY_NAME),
-                        null,
-                        null,
-                        null,
-                    )?.use { cursor ->
-                        if (cursor.moveToFirst()) cursor.getString(0) else null
-                    }
-
-                    require(displayName?.endsWith(".litertlm", ignoreCase = true) == true) {
-                        "Arquivo inválido: selecione o modelo .litertlm, não o APK/ZIP do aplicativo."
-                    }
-
-                    val tempFile = File(context.cacheDir, "$MODEL_FILE_NAME.import")
-                    try {
-                        context.contentResolver.openInputStream(uri)?.use { input ->
-                            tempFile.outputStream().use { output -> input.copyTo(output) }
-                        } ?: error("Não foi possível abrir o arquivo selecionado")
-
-                        require(tempFile.length() > 1024L) {
-                            "O arquivo selecionado está vazio ou pequeno demais para ser um modelo LiteRT-LM."
-                        }
-
-                        val header = ByteArray(4)
-                        FileInputStream(tempFile).use { stream -> stream.read(header) }
-                        val isZip = header[0] == 0x50.toByte() && header[1] == 0x4B.toByte()
-                        require(!isZip) {
-                            "Arquivo ZIP detectado. Extraia/baixe diretamente $MODEL_FILE_NAME e selecione o arquivo .litertlm."
-                        }
-
-                        if (modelFile.exists() && !modelFile.delete()) {
-                            error("Não foi possível substituir o modelo anterior")
-                        }
-                        require(tempFile.renameTo(modelFile)) {
-                            tempFile.copyTo(modelFile, overwrite = true)
-                            tempFile.delete()
-                            true
-                        }
-                    } finally {
-                        if (tempFile.exists()) tempFile.delete()
-                    }
-                }
-            }
-
-            imported.onSuccess {
-                pendingAgent?.close()
-                pendingAgent = null
-                session?.close()
-                session = null
-                modelReady = true
-                diagnostics = "Modelo: ${modelFile.length()} bytes; acessibilidade=${AccessibilityRuntimeBridge.isConnected}"
-                status = "Modelo importado e validado: $MODEL_FILE_NAME"
-            }.onFailure {
-                modelReady = modelFile.exists()
-                diagnostics = "Falha de importação: ${it::class.java.simpleName}"
-                status = "Modelo rejeitado: ${it.message}"
-            }
-            busy = false
-        }
-    }
-
     fun getOrCreateSession(): AndroidFunctionRuntimeSession {
+        check(ModelDownloader.isValidModel(modelFile)) { "Modelo FunctionGemma não está pronto." }
         return session ?: FunctionGemmaRuntimeFactory.create(
             context = context,
             modelPath = modelFile.absolutePath,
@@ -232,22 +193,27 @@ private fun RuntimeDemoScreen() {
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         Text("Android Function Agent", style = MaterialTheme.typography.headlineMedium)
-        Text("LiteRT-LM + MobileActions/FunctionGemma 270M. O modelo escolhe a função; o runtime aplica política e executa a ação Android.")
+        Text("LiteRT-LM + FunctionGemma 270M. O modelo é baixado automaticamente e executado no dispositivo.")
 
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        if (downloadingModel) {
+            LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+            Text("Download automático em andamento. Não feche o aplicativo.", style = MaterialTheme.typography.bodySmall)
+        }
+
+        OutlinedButton(
+            onClick = { scope.launch { downloadModel(force = true) } },
+            enabled = !busy,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Text(if (modelReady) "Baixar modelo novamente" else "Tentar baixar modelo novamente")
+        }
+
+        if (!cameraGranted) {
             OutlinedButton(
-                onClick = { modelPicker.launch(arrayOf("application/octet-stream", "*/*")) },
+                onClick = { cameraPermissionLauncher.launch(Manifest.permission.CAMERA) },
                 enabled = !busy,
-                modifier = Modifier.weight(1f),
-            ) { Text(if (modelReady) "Trocar modelo" else "Selecionar modelo") }
-
-            if (!cameraGranted) {
-                OutlinedButton(
-                    onClick = { cameraPermissionLauncher.launch(Manifest.permission.CAMERA) },
-                    enabled = !busy,
-                    modifier = Modifier.weight(1f),
-                ) { Text("Permitir lanterna") }
-            }
+                modifier = Modifier.fillMaxWidth(),
+            ) { Text("Permitir lanterna") }
         }
 
         OutlinedButton(
@@ -262,7 +228,6 @@ private fun RuntimeDemoScreen() {
 
         Text(status, style = MaterialTheme.typography.bodySmall)
         Text(diagnostics, style = MaterialTheme.typography.bodySmall)
-        if (busy) LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
 
         OutlinedButton(
             onClick = {
@@ -291,31 +256,25 @@ private fun RuntimeDemoScreen() {
         Button(
             onClick = {
                 scope.launch {
-                    if (!modelFile.exists()) {
-                        modelReady = false
-                        status = "Selecione primeiro o arquivo $MODEL_FILE_NAME"
+                    if (!ModelDownloader.isValidModel(modelFile)) {
+                        status = "O modelo ainda não está pronto."
                         return@launch
                     }
                     pendingAgent?.close()
                     pendingAgent = null
                     busy = true
                     status = "Agente executando no dispositivo..."
-                    diagnostics = "Inicializando/consultando FunctionGemma; modelo=${modelFile.length()} bytes; acessibilidade=${AccessibilityRuntimeBridge.isConnected}"
+                    diagnostics = "FunctionGemma=${modelFile.length()} bytes; acessibilidade=${AccessibilityRuntimeBridge.isConnected}"
                     runCatching {
                         getOrCreateSession().runtime.runAgent(text = prompt, maxSteps = MAX_AGENT_STEPS)
                     }.onSuccess(::renderAgentResult).onFailure {
-                        val detail = it.message.orEmpty()
-                        diagnostics = "Exceção ${it::class.java.simpleName}: $detail"
-                        status = if (detail.contains("magic number", ignoreCase = true) || detail.contains("PK")) {
-                            "Modelo inválido. Toque em Trocar modelo e selecione $MODEL_FILE_NAME (.litertlm), não um ZIP/APK."
-                        } else {
-                            "Erro: ${it.message}"
-                        }
+                        diagnostics = "Exceção ${it::class.java.simpleName}: ${it.message}"
+                        status = "Erro: ${it.message}"
                     }
                     busy = false
                 }
             },
-            enabled = !busy && prompt.isNotBlank() && pendingAgent == null,
+            enabled = !busy && modelReady && prompt.isNotBlank() && pendingAgent == null,
             modifier = Modifier.fillMaxWidth(),
         ) { Text("Executar tarefa") }
 
@@ -324,11 +283,14 @@ private fun RuntimeDemoScreen() {
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 OutlinedButton(
                     onClick = {
-                        pending.close(); pendingAgent = null; status = "Ação cancelada. O agente foi encerrado."
+                        pending.close()
+                        pendingAgent = null
+                        status = "Ação cancelada."
                     },
                     enabled = !busy,
                     modifier = Modifier.weight(1f),
                 ) { Text("Cancelar") }
+
                 Button(
                     onClick = {
                         scope.launch {
@@ -336,12 +298,15 @@ private fun RuntimeDemoScreen() {
                             status = "Ação confirmada. Continuando tarefa..."
                             val currentSession = session
                             if (currentSession == null) {
-                                pending.close(); pendingAgent = null; status = "Sessão do modelo não está disponível."
+                                pending.close()
+                                pendingAgent = null
+                                status = "Sessão do modelo não está disponível."
                             } else {
                                 runCatching { currentSession.runtime.resumeAgent(pending, confirmed = true) }
                                     .onSuccess(::renderAgentResult)
                                     .onFailure {
-                                        pending.close(); pendingAgent = null
+                                        pending.close()
+                                        pendingAgent = null
                                         diagnostics = "Erro ao retomar: ${it::class.java.simpleName}: ${it.message}"
                                         status = "Erro ao continuar agente: ${it.message}"
                                     }
@@ -356,6 +321,6 @@ private fun RuntimeDemoScreen() {
         }
 
         Spacer(modifier = Modifier.height(4.dp))
-        Text("Modelo obrigatório: litert-community/functiongemma-270m-ft-mobile-actions / $MODEL_FILE_NAME", style = MaterialTheme.typography.bodySmall)
+        Text("Modelo automático: ${ModelDownloader.MODEL_FILE_NAME}", style = MaterialTheme.typography.bodySmall)
     }
 }
