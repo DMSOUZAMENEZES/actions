@@ -99,11 +99,21 @@ class LiteRtFunctionGemmaIntentModel(
     ) : AgentModelSession {
         private var closed = false
         private var deterministicToolPending = false
+        private var pendingWhatsAppRequest: String? = null
 
         override suspend fun start(request: UserRequest): AgentModelTurn {
             if (WHATSAPP_RUNTIME_TOOL in allowedTools && isWhatsAppSummaryRequest(request.text)) {
-                Log.d(TAG, "Using native LiteRT-LM automatic tool loop for WhatsApp")
-                return runNativeWhatsAppTurn(request.text)
+                val conversationName = extractWhatsAppConversation(request.text)
+                pendingWhatsAppRequest = request.text
+                Log.d(TAG, "WhatsApp read requires policy confirmation before automatic LiteRT-LM tool execution")
+                return AgentModelTurn.ToolCall(
+                    name = WHATSAPP_RUNTIME_TOOL,
+                    modelToolName = "summarizeWhatsAppConversation",
+                    arguments = buildMap {
+                        if (!conversationName.isNullOrBlank()) put("conversation", conversationName)
+                        put("maxItems", "30")
+                    },
+                )
             }
 
             deterministicNativeRoute(request.text, allowedTools)?.let {
@@ -143,6 +153,20 @@ class LiteRtFunctionGemmaIntentModel(
             modelToolName: String,
             result: Map<String, Any?>,
         ): AgentModelTurn {
+            pendingWhatsAppRequest?.let { originalRequest ->
+                pendingWhatsAppRequest = null
+                val success = result["success"] == true
+                val authorized = (result["data"] as? Map<*, *>)?.get("authorized")?.toString() == "true"
+                if (!success || !authorized) {
+                    val message = result["message"]?.toString().orEmpty()
+                    return AgentModelTurn.Completed(
+                        message.ifBlank { "A leitura do WhatsApp não foi autorizada." }
+                    )
+                }
+                Log.d(TAG, "WhatsApp read authorized; entering native LiteRT-LM automatic tool loop")
+                return runNativeWhatsAppTurn(originalRequest)
+            }
+
             if (deterministicToolPending) {
                 deterministicToolPending = false
                 val success = result["success"] == true
@@ -215,6 +239,20 @@ private fun isWhatsAppSummaryRequest(text: String): Boolean {
         listOf("resum", "ler", "leia", "mensagen", "mensagem", "conversa").any { it in normalized }
 }
 
+private fun extractWhatsAppConversation(text: String): String? {
+    val patterns = listOf(
+        Regex("(?i)conversa\\s+(?:com|de)\\s+(.+)$"),
+        Regex("(?i)mensagens?\\s+(?:com|de|do|da)\\s+(.+)$"),
+        Regex("(?i)whatsapp\\s+(?:com|de|do|da)\\s+(.+)$"),
+    )
+    return patterns.firstNotNullOfOrNull { pattern ->
+        pattern.find(text)?.groupValues?.getOrNull(1)
+            ?.trim()
+            ?.trimEnd('.', '!', '?', ',', ';', ':')
+            ?.takeIf { it.isNotBlank() && it.length <= 120 }
+    }
+}
+
 private fun deterministicNativeRoute(
     text: String,
     allowedTools: Set<String>,
@@ -268,7 +306,7 @@ private fun String.toRuntimeToolName(): String = when (this) {
     "openUrl" -> "open_url"
     "dialNumber" -> "dial_number"
     "youtubeSearch" -> "youtube_search"
-    "whatsappSummarizeConversation" -> WHATSAPP_RUNTIME_TOOL
+    "whatsappSummarizeConversation", "summarizeWhatsAppConversation" -> WHATSAPP_RUNTIME_TOOL
     "readUiTree" -> "read_ui_tree"
     "clickUiNode" -> "click_ui_node"
     "setUiText" -> "set_ui_text"
