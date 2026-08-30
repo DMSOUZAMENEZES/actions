@@ -182,30 +182,28 @@ class LiteRtFunctionGemmaIntentModel(
             ),
         )
     }
+}
 
-    companion object {
-        private fun String.toRuntimeToolName(): String = when (this) {
-            "openWifiSettings" -> "open_wifi_settings"
-            "openApp" -> "open_app"
-            "openUrl" -> "open_url"
-            "dialNumber" -> "dial_number"
-            "youtubeSearch" -> "youtube_search"
-            "readUiTree" -> "read_ui_tree"
-            "clickUiNode" -> "click_ui_node"
-            "setUiText" -> "set_ui_text"
-            "scrollUiForward" -> "scroll_ui_forward"
-            "accessibilityBack" -> "accessibility_back"
-            "flashlightOn" -> "flashlight_on"
-            "flashlightOff" -> "flashlight_off"
-            else -> this
-        }
+private fun String.toRuntimeToolName(): String = when (this) {
+    "openWifiSettings" -> "open_wifi_settings"
+    "openApp" -> "open_app"
+    "openUrl" -> "open_url"
+    "dialNumber" -> "dial_number"
+    "youtubeSearch" -> "youtube_search"
+    "readUiTree" -> "read_ui_tree"
+    "clickUiNode" -> "click_ui_node"
+    "setUiText" -> "set_ui_text"
+    "scrollUiForward" -> "scroll_ui_forward"
+    "accessibilityBack" -> "accessibility_back"
+    "flashlightOn" -> "flashlight_on"
+    "flashlightOff" -> "flashlight_off"
+    else -> this
+}
 
-        private fun Any?.toRuntimeArgument(): String = when (this) {
-            null -> ""
-            is String -> this
-            is Number, is Boolean -> toString()
-            is List<*> -> joinToString(",") { it.toRuntimeArgument() }
-            else -> toString()
-        }
-    }
+private fun Any?.toRuntimeArgument(): String = when (this) {
+    null -> ""
+    is String -> this
+    is Number, is Boolean -> toString()
+    is List<*> -> joinToString(",") { it.toRuntimeArgument() }
+    else -> toString()
 }
