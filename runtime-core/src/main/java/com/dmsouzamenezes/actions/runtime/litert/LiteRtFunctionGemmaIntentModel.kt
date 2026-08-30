@@ -94,7 +94,7 @@ class LiteRtFunctionGemmaIntentModel(
         override suspend fun start(request: UserRequest): AgentModelTurn {
             deterministicNativeRoute(request.text, allowedTools)?.let {
                 deterministicToolPending = true
-                Log.d(TAG, "Deterministic native route: ${it.name}")
+                Log.d(TAG, "Deterministic route: ${it.name} ${it.arguments}")
                 return it
             }
             return send(Message.user(request.text))
@@ -158,8 +158,9 @@ class LiteRtFunctionGemmaIntentModel(
                     "Native Android actions always take precedence over accessibility primitives. For Wi-Fi settings " +
                     "use openWifiSettings; never use setUiText, clickUiNode, or readUiTree. Use accessibility primitives " +
                     "only when no dedicated native or high-level skill exists. Prefer constrained high-level skills. " +
-                    "When the user asks to read or summarize one WhatsApp conversation, use whatsappSummarizeConversation. " +
-                    "Do not use generic click/read tools to scan multiple private conversations. Stop when complete."
+                    "When the user asks to read or summarize one WhatsApp conversation, always use whatsappSummarizeConversation; " +
+                    "do not stop after openApp(WhatsApp). Do not use generic click/read tools to scan multiple private conversations. " +
+                    "Stop when complete."
             ),
             Content.Text(
                 "Current date and time given in YYYY-MM-DDTHH:MM:SS format: $dateTime\nDay of week is $day"
@@ -176,10 +177,29 @@ private fun deterministicNativeRoute(
         .replace(Regex("\\p{M}+"), "")
         .trim()
 
-    fun route(runtimeName: String, modelName: String): AgentModelTurn.ToolCall? =
+    fun route(
+        runtimeName: String,
+        modelName: String,
+        arguments: Map<String, String> = emptyMap(),
+    ): AgentModelTurn.ToolCall? =
         if (runtimeName in allowedTools) {
-            AgentModelTurn.ToolCall(runtimeName, modelName, emptyMap())
+            AgentModelTurn.ToolCall(runtimeName, modelName, arguments)
         } else null
+
+    if ("whatsapp" in normalized &&
+        listOf("resum", "ler", "leia", "mensagen", "mensagem", "conversa").any { it in normalized }
+    ) {
+        val conversation = extractWhatsAppConversation(text)
+        val arguments = buildMap {
+            if (!conversation.isNullOrBlank()) put("conversation", conversation)
+            put("maxItems", "30")
+        }
+        return route(
+            "whatsapp_summarize_conversation",
+            "whatsappSummarizeConversation",
+            arguments,
+        )
+    }
 
     if (("wifi" in normalized || "wi-fi" in normalized) &&
         listOf("configur", "ajuste", "setting", "abr").any { it in normalized }
@@ -200,6 +220,20 @@ private fun deterministicNativeRoute(
     }
 
     return null
+}
+
+private fun extractWhatsAppConversation(text: String): String? {
+    val patterns = listOf(
+        Regex("(?i)conversa\\s+(?:com|de)\\s+(.+)$"),
+        Regex("(?i)mensagens?\\s+(?:com|de|do|da)\\s+(.+)$"),
+        Regex("(?i)whatsapp\\s+(?:com|de|do|da)\\s+(.+)$"),
+    )
+    return patterns.firstNotNullOfOrNull { pattern ->
+        pattern.find(text)?.groupValues?.getOrNull(1)
+            ?.trim()
+            ?.trimEnd('.', '!', '?', ',', ';', ':')
+            ?.takeIf { it.isNotBlank() && it.length <= 120 }
+    }
 }
 
 private fun cleanModelText(raw: String): String = raw
