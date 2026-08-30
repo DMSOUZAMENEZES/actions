@@ -1,6 +1,7 @@
 package com.dmsouzamenezes.actions.runtime
 
 import com.dmsouzamenezes.actions.runtime.actions.AccessibilityBackAction
+import com.dmsouzamenezes.actions.runtime.actions.AuthorizeWhatsAppConversationReadAction
 import com.dmsouzamenezes.actions.runtime.actions.ClickUiNodeAction
 import com.dmsouzamenezes.actions.runtime.actions.CreateCalendarEventAction
 import com.dmsouzamenezes.actions.runtime.actions.CreateContactAction
@@ -14,7 +15,6 @@ import com.dmsouzamenezes.actions.runtime.actions.SendEmailAction
 import com.dmsouzamenezes.actions.runtime.actions.SetFlashlightAction
 import com.dmsouzamenezes.actions.runtime.actions.SetUiTextAction
 import com.dmsouzamenezes.actions.runtime.actions.ShowLocationOnMapAction
-import com.dmsouzamenezes.actions.runtime.actions.WhatsAppConversationSummaryAction
 import com.dmsouzamenezes.actions.runtime.actions.YouTubeSearchAction
 
 object RuntimeToolCatalog {
@@ -51,12 +51,11 @@ object RuntimeToolCatalog {
         register(
             RegisteredTool(
                 "whatsapp_summarize_conversation",
-                "Open WhatsApp and summarize one explicitly selected visible conversation. Private-message reading requires confirmation."
+                "Authorize one local read-only WhatsApp conversation summary. Private-message reading requires confirmation before the LiteRT-LM tool executes."
             )
         ) { args ->
-            WhatsAppConversationSummaryAction(
+            AuthorizeWhatsAppConversationReadAction(
                 conversation = args["conversation"]?.takeIf { it.isNotBlank() },
-                maxItems = args["maxItems"]?.toIntOrNull() ?: 30,
             )
         }
         register(RegisteredTool("read_ui_tree", "Read the active Android accessibility UI tree and return semantic node IDs.")) { ReadUiTreeAction }
