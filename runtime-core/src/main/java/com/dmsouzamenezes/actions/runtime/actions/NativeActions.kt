@@ -9,22 +9,55 @@ import com.dmsouzamenezes.actions.runtime.ActionRisk
 import com.dmsouzamenezes.actions.runtime.AndroidAction
 
 data class OpenAppAction(
-    val packageName: String,
+    val appName: String,
 ) : AndroidAction {
     override val id: String = "open_app"
     override val risk: ActionRisk = ActionRisk.SAFE
 
     override suspend fun execute(context: ActionContext): ActionResult {
-        val intent = context.androidContext.packageManager
-            .getLaunchIntentForPackage(packageName)
+        val packageManager = context.androidContext.packageManager
+        val trimmed = appName.trim()
+
+        val directIntent = packageManager.getLaunchIntentForPackage(trimmed)
+        val resolvedPackage = if (directIntent != null) {
+            trimmed
+        } else {
+            val launcherQuery = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
+            packageManager.queryIntentActivities(launcherQuery, 0)
+                .asSequence()
+                .firstOrNull { resolveInfo ->
+                    val label = resolveInfo.loadLabel(packageManager).toString()
+                    label.equals(trimmed, ignoreCase = true) ||
+                        resolveInfo.activityInfo.packageName.equals(trimmed, ignoreCase = true)
+                }
+                ?.activityInfo
+                ?.packageName
+        }
+
+        val packageName = resolvedPackage
             ?: return ActionResult.Failure(
                 code = "app_not_installed",
-                message = "Application not installed: $packageName",
+                message = "Application not installed or not visible: $appName",
             )
 
-        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        context.androidContext.startActivity(intent)
-        return ActionResult.Success(data = mapOf("package" to packageName))
+        val intent = directIntent ?: packageManager.getLaunchIntentForPackage(packageName)
+            ?: return ActionResult.Failure(
+                code = "app_not_launchable",
+                message = "Application cannot be launched: $appName",
+            )
+
+        return runCatching {
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            context.androidContext.startActivity(intent)
+            ActionResult.Success(
+                data = mapOf(
+                    "app_name" to appName,
+                    "package" to packageName,
+                )
+            )
+        }.getOrElse {
+            ActionResult.Failure("intent_failed", it.message ?: "Failed to open application", it)
+        }
     }
 }
 
