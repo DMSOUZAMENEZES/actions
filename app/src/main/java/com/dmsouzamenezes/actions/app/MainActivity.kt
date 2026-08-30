@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Bundle
+import android.provider.OpenableColumns
 import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -41,6 +42,7 @@ import com.dmsouzamenezes.actions.runtime.FunctionGemmaRuntimeFactory
 import com.dmsouzamenezes.actions.runtime.PendingAgentRun
 import com.dmsouzamenezes.actions.runtime.accessibility.AccessibilityRuntimeBridge
 import java.io.File
+import java.io.FileInputStream
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -70,7 +72,7 @@ private fun RuntimeDemoScreen() {
     var prompt by remember { mutableStateOf("Abra as configurações do Wi-Fi") }
     var status by remember {
         mutableStateOf(
-            if (modelFile.exists()) "Modelo pronto: ${modelFile.absolutePath}"
+            if (modelFile.exists()) "Modelo encontrado. Use Trocar modelo se precisar substituir."
             else "Selecione o arquivo $MODEL_FILE_NAME"
         )
     }
@@ -132,25 +134,64 @@ private fun RuntimeDemoScreen() {
 
         scope.launch {
             busy = true
-            status = "Copiando modelo para o armazenamento privado do app..."
-            val copied = runCatching {
+            status = "Validando modelo LiteRT-LM..."
+            val imported = runCatching {
                 withContext(Dispatchers.IO) {
-                    context.contentResolver.openInputStream(uri)?.use { input ->
-                        modelFile.outputStream().use { output -> input.copyTo(output) }
-                    } ?: error("Não foi possível abrir o arquivo selecionado")
+                    val displayName = context.contentResolver.query(
+                        uri,
+                        arrayOf(OpenableColumns.DISPLAY_NAME),
+                        null,
+                        null,
+                        null,
+                    )?.use { cursor ->
+                        if (cursor.moveToFirst()) cursor.getString(0) else null
+                    }
+
+                    require(displayName?.endsWith(".litertlm", ignoreCase = true) == true) {
+                        "Arquivo inválido: selecione o modelo .litertlm, não o APK/ZIP do aplicativo."
+                    }
+
+                    val tempFile = File(context.cacheDir, "$MODEL_FILE_NAME.import")
+                    try {
+                        context.contentResolver.openInputStream(uri)?.use { input ->
+                            tempFile.outputStream().use { output -> input.copyTo(output) }
+                        } ?: error("Não foi possível abrir o arquivo selecionado")
+
+                        require(tempFile.length() > 1024L) {
+                            "O arquivo selecionado está vazio ou pequeno demais para ser um modelo LiteRT-LM."
+                        }
+
+                        val header = ByteArray(4)
+                        FileInputStream(tempFile).use { stream -> stream.read(header) }
+                        val isZip = header[0] == 0x50.toByte() && header[1] == 0x4B.toByte()
+                        require(!isZip) {
+                            "Arquivo ZIP detectado. Extraia/baixe diretamente $MODEL_FILE_NAME e selecione o arquivo .litertlm."
+                        }
+
+                        if (modelFile.exists() && !modelFile.delete()) {
+                            error("Não foi possível substituir o modelo anterior")
+                        }
+                        require(tempFile.renameTo(modelFile)) {
+                            tempFile.copyTo(modelFile, overwrite = true)
+                            tempFile.delete()
+                            true
+                        }
+                    } finally {
+                        if (tempFile.exists()) tempFile.delete()
+                    }
                 }
             }
 
-            copied.onSuccess {
+            imported.onSuccess {
                 pendingAgent?.close()
                 pendingAgent = null
                 session?.close()
                 session = null
                 modelReady = true
-                status = "Modelo pronto: ${modelFile.absolutePath}"
+                status = "Modelo importado e validado: $MODEL_FILE_NAME"
             }.onFailure {
                 modelReady = modelFile.exists()
-                status = "Falha ao importar modelo: ${it.message}"
+                status = "Modelo rejeitado: ${it.message}"
             }
             busy = false
         }
@@ -164,64 +205,40 @@ private fun RuntimeDemoScreen() {
     }
 
     Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(20.dp),
+        modifier = Modifier.fillMaxSize().padding(20.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         Text("Android Function Agent", style = MaterialTheme.typography.headlineMedium)
-        Text(
-            "LiteRT-LM + MobileActions/FunctionGemma 270M. O modelo pode executar várias tools " +
-                "em sequência; cada ação passa pela política Android antes de ser executada."
-        )
+        Text("LiteRT-LM + MobileActions/FunctionGemma 270M. O modelo escolhe a função; o runtime aplica política e executa a ação Android.")
 
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             OutlinedButton(
-                onClick = { modelPicker.launch(arrayOf("*/*")) },
+                onClick = { modelPicker.launch(arrayOf("application/octet-stream", "*/*")) },
                 enabled = !busy,
                 modifier = Modifier.weight(1f),
-            ) {
-                Text(if (modelReady) "Trocar modelo" else "Selecionar modelo")
-            }
+            ) { Text(if (modelReady) "Trocar modelo" else "Selecionar modelo") }
 
             if (!cameraGranted) {
                 OutlinedButton(
                     onClick = { cameraPermissionLauncher.launch(Manifest.permission.CAMERA) },
                     enabled = !busy,
                     modifier = Modifier.weight(1f),
-                ) {
-                    Text("Permitir lanterna")
-                }
+                ) { Text("Permitir lanterna") }
             }
         }
 
         OutlinedButton(
             onClick = {
-                context.startActivity(
-                    Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
-                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                )
+                context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
             },
             enabled = !busy,
             modifier = Modifier.fillMaxWidth(),
         ) {
-            Text(
-                if (AccessibilityRuntimeBridge.isConnected) {
-                    "Acessibilidade conectada"
-                } else {
-                    "Ativar automação por acessibilidade"
-                }
-            )
+            Text(if (AccessibilityRuntimeBridge.isConnected) "Acessibilidade conectada" else "Ativar automação por acessibilidade")
         }
 
         Text(status, style = MaterialTheme.typography.bodySmall)
-
-        if (busy) {
-            LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-        }
+        if (busy) LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
 
         OutlinedTextField(
             value = prompt,
@@ -240,46 +257,37 @@ private fun RuntimeDemoScreen() {
                         status = "Selecione primeiro o arquivo $MODEL_FILE_NAME"
                         return@launch
                     }
-
                     pendingAgent?.close()
                     pendingAgent = null
                     busy = true
                     status = "Agente executando no dispositivo..."
-
                     runCatching {
-                        getOrCreateSession().runtime.runAgent(
-                            text = prompt,
-                            maxSteps = MAX_AGENT_STEPS,
-                        )
-                    }.onSuccess(::renderAgentResult)
-                        .onFailure { status = "Erro: ${it.message}" }
-
+                        getOrCreateSession().runtime.runAgent(text = prompt, maxSteps = MAX_AGENT_STEPS)
+                    }.onSuccess(::renderAgentResult).onFailure {
+                        val detail = it.message.orEmpty()
+                        status = if (detail.contains("magic number", ignoreCase = true) || detail.contains("PK")) {
+                            "Modelo inválido. Toque em Trocar modelo e selecione $MODEL_FILE_NAME (.litertlm), não um ZIP/APK."
+                        } else {
+                            "Erro: ${it.message}"
+                        }
+                    }
                     busy = false
                 }
             },
             enabled = !busy && prompt.isNotBlank() && pendingAgent == null,
             modifier = Modifier.fillMaxWidth(),
-        ) {
-            Text("Executar tarefa")
-        }
+        ) { Text("Executar tarefa") }
 
         pendingAgent?.let { pending ->
             Text("Confirmação necessária", style = MaterialTheme.typography.titleMedium)
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 OutlinedButton(
                     onClick = {
-                        pending.close()
-                        pendingAgent = null
-                        status = "Ação cancelada. O agente foi encerrado."
+                        pending.close(); pendingAgent = null; status = "Ação cancelada. O agente foi encerrado."
                     },
                     enabled = !busy,
                     modifier = Modifier.weight(1f),
-                ) {
-                    Text("Cancelar")
-                }
+                ) { Text("Cancelar") }
                 Button(
                     onClick = {
                         scope.launch {
@@ -287,35 +295,22 @@ private fun RuntimeDemoScreen() {
                             status = "Ação confirmada. Continuando tarefa..."
                             val currentSession = session
                             if (currentSession == null) {
-                                pending.close()
-                                pendingAgent = null
-                                status = "Sessão do modelo não está disponível."
+                                pending.close(); pendingAgent = null; status = "Sessão do modelo não está disponível."
                             } else {
-                                runCatching {
-                                    currentSession.runtime.resumeAgent(pending, confirmed = true)
-                                }.onSuccess(::renderAgentResult)
-                                    .onFailure {
-                                        pending.close()
-                                        pendingAgent = null
-                                        status = "Erro ao continuar agente: ${it.message}"
-                                    }
+                                runCatching { currentSession.runtime.resumeAgent(pending, confirmed = true) }
+                                    .onSuccess(::renderAgentResult)
+                                    .onFailure { pending.close(); pendingAgent = null; status = "Erro ao continuar agente: ${it.message}" }
                             }
                             busy = false
                         }
                     },
                     modifier = Modifier.weight(1f),
                     enabled = !busy,
-                ) {
-                    Text("Confirmar e continuar")
-                }
+                ) { Text("Confirmar e continuar") }
             }
         }
 
         Spacer(modifier = Modifier.height(4.dp))
-        Text(
-            "Limite de segurança: $MAX_AGENT_STEPS ações por tarefa. Modelo: " +
-                "litert-community/functiongemma-270m-ft-mobile-actions / $MODEL_FILE_NAME",
-            style = MaterialTheme.typography.bodySmall,
-        )
+        Text("Modelo obrigatório: litert-community/functiongemma-270m-ft-mobile-actions / $MODEL_FILE_NAME", style = MaterialTheme.typography.bodySmall)
     }
 }
