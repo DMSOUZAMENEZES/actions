@@ -18,6 +18,7 @@ import com.google.ai.edge.litertlm.EngineConfig
 import com.google.ai.edge.litertlm.Message
 import com.google.ai.edge.litertlm.SamplerConfig
 import com.google.ai.edge.litertlm.tool
+import java.text.Normalizer
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 import kotlinx.coroutines.Dispatchers
@@ -88,13 +89,32 @@ class LiteRtFunctionGemmaIntentModel(
         private val allowedTools: Set<String>,
     ) : AgentModelSession {
         private var closed = false
+        private var deterministicToolPending = false
 
-        override suspend fun start(request: UserRequest): AgentModelTurn = send(Message.user(request.text))
+        override suspend fun start(request: UserRequest): AgentModelTurn {
+            deterministicNativeRoute(request.text, allowedTools)?.let {
+                deterministicToolPending = true
+                Log.d(TAG, "Deterministic native route: ${it.name}")
+                return it
+            }
+            return send(Message.user(request.text))
+        }
 
         override suspend fun continueWithToolResult(
             modelToolName: String,
             result: Map<String, Any?>,
-        ): AgentModelTurn = send(Message.tool(Contents.of(Content.ToolResponse(modelToolName, result))))
+        ): AgentModelTurn {
+            if (deterministicToolPending) {
+                deterministicToolPending = false
+                val success = result["success"] == true
+                val message = result["message"]?.toString().orEmpty()
+                return AgentModelTurn.Completed(
+                    if (success) message.ifBlank { "Ação executada com sucesso." }
+                    else message.ifBlank { "A ação não pôde ser executada." }
+                )
+            }
+            return send(Message.tool(Contents.of(Content.ToolResponse(modelToolName, result))))
+        }
 
         private suspend fun send(message: Message): AgentModelTurn = withContext(Dispatchers.Default) {
             check(!closed) { "Agent model session is already closed" }
@@ -102,7 +122,7 @@ class LiteRtFunctionGemmaIntentModel(
             Log.d(TAG, "Agent response: $response")
             Log.d(TAG, "Agent tool calls: ${response.toolCalls}")
             val call = response.toolCalls.firstOrNull()
-                ?: return@withContext AgentModelTurn.Completed(response.toString())
+                ?: return@withContext AgentModelTurn.Completed(cleanModelText(response.toString()))
             val runtimeName = call.name.toRuntimeToolName()
             if (runtimeName !in allowedTools) {
                 Log.w(TAG, "Tool unavailable in runtime: $runtimeName")
@@ -134,11 +154,12 @@ class LiteRtFunctionGemmaIntentModel(
         val day = now.format(DateTimeFormatter.ofPattern("EEEE"))
         return Contents.of(
             Content.Text(
-                "You are an Android action agent. Use the provided tools to complete the user's request. " +
-                    "After each tool result, decide whether another tool is required. Prefer constrained high-level " +
-                    "skills over generic accessibility primitives. When the user asks to read or summarize one " +
-                    "WhatsApp conversation, use whatsappSummarizeConversation. Do not use generic click/read tools " +
-                    "to scan multiple private conversations. Stop calling tools when the requested task is complete."
+                "You are an Android action agent. Use exactly the most specific provided tool for the user's request. " +
+                    "Native Android actions always take precedence over accessibility primitives. For Wi-Fi settings " +
+                    "use openWifiSettings; never use setUiText, clickUiNode, or readUiTree. Use accessibility primitives " +
+                    "only when no dedicated native or high-level skill exists. Prefer constrained high-level skills. " +
+                    "When the user asks to read or summarize one WhatsApp conversation, use whatsappSummarizeConversation. " +
+                    "Do not use generic click/read tools to scan multiple private conversations. Stop when complete."
             ),
             Content.Text(
                 "Current date and time given in YYYY-MM-DDTHH:MM:SS format: $dateTime\nDay of week is $day"
@@ -146,6 +167,49 @@ class LiteRtFunctionGemmaIntentModel(
         )
     }
 }
+
+private fun deterministicNativeRoute(
+    text: String,
+    allowedTools: Set<String>,
+): AgentModelTurn.ToolCall? {
+    val normalized = Normalizer.normalize(text.lowercase(), Normalizer.Form.NFD)
+        .replace(Regex("\\p{M}+"), "")
+        .trim()
+
+    fun route(runtimeName: String, modelName: String): AgentModelTurn.ToolCall? =
+        if (runtimeName in allowedTools) {
+            AgentModelTurn.ToolCall(runtimeName, modelName, emptyMap())
+        } else null
+
+    if (("wifi" in normalized || "wi-fi" in normalized) &&
+        listOf("configur", "ajuste", "setting", "abr").any { it in normalized }
+    ) {
+        return route("open_wifi_settings", "openWifiSettings")
+    }
+
+    if (("lanterna" in normalized || "flashlight" in normalized) &&
+        listOf("lig", "acend", "ativ", "on").any { it in normalized }
+    ) {
+        return route("flashlight_on", "flashlightOn")
+    }
+
+    if (("lanterna" in normalized || "flashlight" in normalized) &&
+        listOf("deslig", "apag", "desativ", "off").any { it in normalized }
+    ) {
+        return route("flashlight_off", "flashlightOff")
+    }
+
+    return null
+}
+
+private fun cleanModelText(raw: String): String = raw
+    .replace(Regex("(?i)_?<escape>\\.?"), "")
+    .replace(Regex("(?i)<escape>"), "")
+    .lines()
+    .map { it.trim() }
+    .filter { it.isNotBlank() && it != "." }
+    .joinToString("\n")
+    .ifBlank { "Tarefa concluída." }
 
 private fun String.toRuntimeToolName(): String = when (this) {
     "openWifiSettings" -> "open_wifi_settings"
