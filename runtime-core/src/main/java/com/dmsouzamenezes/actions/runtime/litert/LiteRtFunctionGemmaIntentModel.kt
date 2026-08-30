@@ -23,7 +23,13 @@ import kotlinx.coroutines.withContext
 
 private const val TAG = "ActionsFunctionGemma"
 
-/** Minimal on-device FunctionGemma proof-of-concept for Wi-Fi settings. */
+/**
+ * On-device FunctionGemma router backed by the official LiteRT-LM Kotlin tool API.
+ *
+ * The model receives real @Tool schemas from [FunctionGemmaTools]. We intentionally keep
+ * automaticToolCalling disabled here so the existing Android runtime can apply policy and ask
+ * for confirmation before sensitive actions are executed.
+ */
 class LiteRtFunctionGemmaIntentModel(
     context: Context,
     modelPath: String,
@@ -86,8 +92,9 @@ class LiteRtFunctionGemmaIntentModel(
                     return@use ModelDecision.NoAction(response.toString())
                 }
 
-                Log.d(TAG, "Tool call name=${toolCall.name} args=${toolCall.arguments}")
                 val runtimeName = toolCall.name.toRuntimeToolName()
+                Log.d(TAG, "Tool call name=${toolCall.name} runtime=$runtimeName args=${toolCall.arguments}")
+
                 if (runtimeName !in allowedTools) {
                     Log.w(TAG, "Tool unavailable in runtime: $runtimeName")
                     return@use ModelDecision.NoAction(
@@ -98,7 +105,7 @@ class LiteRtFunctionGemmaIntentModel(
                 ModelDecision.ToolCall(
                     name = runtimeName,
                     arguments = toolCall.arguments.mapValues { (_, value) ->
-                        value?.toString().orEmpty()
+                        value.toRuntimeArgument()
                     },
                 )
             }
@@ -118,7 +125,10 @@ class LiteRtFunctionGemmaIntentModel(
         val day = now.format(DateTimeFormatter.ofPattern("EEEE"))
 
         return Contents.of(
-            Content.Text("You are a model that can do function calling with the following functions"),
+            Content.Text(
+                "You are an Android action router. Use the provided tools whenever the user asks " +
+                    "the device to perform an action. Choose only one tool for the current step."
+            ),
             Content.Text(
                 "Current date and time given in YYYY-MM-DDTHH:MM:SS format: $dateTime\n" +
                     "Day of week is $day"
@@ -128,6 +138,25 @@ class LiteRtFunctionGemmaIntentModel(
 
     private fun String.toRuntimeToolName(): String = when (this) {
         "openWifiSettings" -> "open_wifi_settings"
+        "openApp" -> "open_app"
+        "openUrl" -> "open_url"
+        "dialNumber" -> "dial_number"
+        "youtubeSearch" -> "youtube_search"
+        "readUiTree" -> "read_ui_tree"
+        "clickUiNode" -> "click_ui_node"
+        "setUiText" -> "set_ui_text"
+        "scrollUiForward" -> "scroll_ui_forward"
+        "accessibilityBack" -> "accessibility_back"
+        "flashlightOn" -> "flashlight_on"
+        "flashlightOff" -> "flashlight_off"
         else -> this
+    }
+
+    private fun Any?.toRuntimeArgument(): String = when (this) {
+        null -> ""
+        is String -> this
+        is Number, is Boolean -> toString()
+        is List<*> -> joinToString(",") { it.toRuntimeArgument() }
+        else -> toString()
     }
 }
