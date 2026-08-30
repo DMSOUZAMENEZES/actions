@@ -35,11 +35,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
-import com.dmsouzamenezes.actions.runtime.ActionPlan
-import com.dmsouzamenezes.actions.runtime.ActionResult
+import com.dmsouzamenezes.actions.runtime.AgentRunResult
 import com.dmsouzamenezes.actions.runtime.AndroidFunctionRuntimeSession
 import com.dmsouzamenezes.actions.runtime.FunctionGemmaRuntimeFactory
-import com.dmsouzamenezes.actions.runtime.PlanningResult
+import com.dmsouzamenezes.actions.runtime.PendingAgentRun
 import com.dmsouzamenezes.actions.runtime.accessibility.AccessibilityRuntimeBridge
 import java.io.File
 import kotlinx.coroutines.Dispatchers
@@ -47,6 +46,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 private const val MODEL_FILE_NAME = "mobile_actions_q8_ekv1024.litertlm"
+private const val MAX_AGENT_STEPS = 8
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -76,7 +76,7 @@ private fun RuntimeDemoScreen() {
     }
     var busy by remember { mutableStateOf(false) }
     var modelReady by remember { mutableStateOf(modelFile.exists()) }
-    var pendingPlan by remember { mutableStateOf<ActionPlan?>(null) }
+    var pendingAgent by remember { mutableStateOf<PendingAgentRun?>(null) }
     var session by remember { mutableStateOf<AndroidFunctionRuntimeSession?>(null) }
     var cameraGranted by remember {
         mutableStateOf(
@@ -86,7 +86,32 @@ private fun RuntimeDemoScreen() {
     }
 
     DisposableEffect(Unit) {
-        onDispose { session?.close() }
+        onDispose {
+            pendingAgent?.close()
+            session?.close()
+        }
+    }
+
+    fun renderAgentResult(result: AgentRunResult) {
+        when (result) {
+            is AgentRunResult.Completed -> {
+                pendingAgent = null
+                val steps = result.trace.size
+                status = if (result.response.isBlank()) {
+                    "Tarefa concluída em $steps etapa(s)."
+                } else {
+                    "Tarefa concluída em $steps etapa(s): ${result.response}"
+                }
+            }
+            is AgentRunResult.ConfirmationRequired -> {
+                pendingAgent = result.pending
+                status = "Confirmação necessária: ${result.summary}"
+            }
+            is AgentRunResult.Failure -> {
+                pendingAgent = null
+                status = "Falha [${result.code}]: ${result.message}"
+            }
+        }
     }
 
     val cameraPermissionLauncher = rememberLauncherForActivityResult(
@@ -117,9 +142,10 @@ private fun RuntimeDemoScreen() {
             }
 
             copied.onSuccess {
+                pendingAgent?.close()
+                pendingAgent = null
                 session?.close()
                 session = null
-                pendingPlan = null
                 modelReady = true
                 status = "Modelo pronto: ${modelFile.absolutePath}"
             }.onFailure {
@@ -143,10 +169,10 @@ private fun RuntimeDemoScreen() {
             .padding(20.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Text("Android Function Runtime", style = MaterialTheme.typography.headlineMedium)
+        Text("Android Function Agent", style = MaterialTheme.typography.headlineMedium)
         Text(
-            "LiteRT-LM + MobileActions/FunctionGemma 270M. O modelo escolhe a função; " +
-                "o runtime aplica política e executa a ação Android."
+            "LiteRT-LM + MobileActions/FunctionGemma 270M. O modelo pode executar várias tools " +
+                "em sequência; cada ação passa pela política Android antes de ser executada."
         )
 
         Row(
@@ -203,7 +229,7 @@ private fun RuntimeDemoScreen() {
             modifier = Modifier.fillMaxWidth(),
             minLines = 3,
             label = { Text("Comando") },
-            enabled = !busy,
+            enabled = !busy && pendingAgent == null,
         )
 
         Button(
@@ -215,42 +241,29 @@ private fun RuntimeDemoScreen() {
                         return@launch
                     }
 
+                    pendingAgent?.close()
+                    pendingAgent = null
                     busy = true
-                    pendingPlan = null
-                    status = "Interpretando comando no dispositivo..."
+                    status = "Agente executando no dispositivo..."
 
                     runCatching {
-                        val runtime = getOrCreateSession().runtime
-                        when (val planning = runtime.plan(prompt)) {
-                            is PlanningResult.NoAction -> {
-                                status = "Nenhuma ação: ${planning.response}"
-                            }
-                            is PlanningResult.Failure -> {
-                                status = "Falha de planejamento [${planning.code}]: ${planning.message}"
-                            }
-                            is PlanningResult.Planned -> {
-                                when (val result = runtime.execute(planning.plan)) {
-                                    is ActionResult.ConfirmationRequired -> {
-                                        pendingPlan = planning.plan
-                                        status = result.summary
-                                    }
-                                    else -> status = result.render()
-                                }
-                            }
-                        }
-                    }.onFailure {
-                        status = "Erro: ${it.message}"
-                    }
+                        getOrCreateSession().runtime.runAgent(
+                            text = prompt,
+                            maxSteps = MAX_AGENT_STEPS,
+                        )
+                    }.onSuccess(::renderAgentResult)
+                        .onFailure { status = "Erro: ${it.message}" }
+
                     busy = false
                 }
             },
-            enabled = !busy && prompt.isNotBlank(),
+            enabled = !busy && prompt.isNotBlank() && pendingAgent == null,
             modifier = Modifier.fillMaxWidth(),
         ) {
-            Text("Executar comando")
+            Text("Executar tarefa")
         }
 
-        pendingPlan?.let { plan ->
+        pendingAgent?.let { pending ->
             Text("Confirmação necessária", style = MaterialTheme.typography.titleMedium)
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -258,9 +271,11 @@ private fun RuntimeDemoScreen() {
             ) {
                 OutlinedButton(
                     onClick = {
-                        pendingPlan = null
-                        status = "Ação cancelada."
+                        pending.close()
+                        pendingAgent = null
+                        status = "Ação cancelada. O agente foi encerrado."
                     },
+                    enabled = !busy,
                     modifier = Modifier.weight(1f),
                 ) {
                     Text("Cancelar")
@@ -269,37 +284,38 @@ private fun RuntimeDemoScreen() {
                     onClick = {
                         scope.launch {
                             busy = true
+                            status = "Ação confirmada. Continuando tarefa..."
                             val currentSession = session
-                            status = if (currentSession == null) {
-                                "Sessão do modelo não está disponível."
+                            if (currentSession == null) {
+                                pending.close()
+                                pendingAgent = null
+                                status = "Sessão do modelo não está disponível."
                             } else {
-                                currentSession.runtime.execute(plan, confirmed = true).render()
+                                runCatching {
+                                    currentSession.runtime.resumeAgent(pending, confirmed = true)
+                                }.onSuccess(::renderAgentResult)
+                                    .onFailure {
+                                        pending.close()
+                                        pendingAgent = null
+                                        status = "Erro ao continuar agente: ${it.message}"
+                                    }
                             }
-                            pendingPlan = null
                             busy = false
                         }
                     },
                     modifier = Modifier.weight(1f),
                     enabled = !busy,
                 ) {
-                    Text("Confirmar")
+                    Text("Confirmar e continuar")
                 }
             }
         }
 
         Spacer(modifier = Modifier.height(4.dp))
         Text(
-            "Modelo esperado: litert-community/functiongemma-270m-ft-mobile-actions / $MODEL_FILE_NAME",
+            "Limite de segurança: $MAX_AGENT_STEPS ações por tarefa. Modelo: " +
+                "litert-community/functiongemma-270m-ft-mobile-actions / $MODEL_FILE_NAME",
             style = MaterialTheme.typography.bodySmall,
         )
     }
-}
-
-private fun ActionResult.render(): String = when (this) {
-    is ActionResult.Success -> buildString {
-        append(message ?: "Ação executada com sucesso")
-        if (data.isNotEmpty()) append(" — $data")
-    }
-    is ActionResult.ConfirmationRequired -> "Confirmação necessária: $summary"
-    is ActionResult.Failure -> "Falha [$code]: $message"
 }
