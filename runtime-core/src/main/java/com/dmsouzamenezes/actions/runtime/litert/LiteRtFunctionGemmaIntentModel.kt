@@ -1,6 +1,7 @@
 package com.dmsouzamenezes.actions.runtime.litert
 
 import android.content.Context
+import android.util.Log
 import com.dmsouzamenezes.actions.runtime.IntentModel
 import com.dmsouzamenezes.actions.runtime.ModelDecision
 import com.dmsouzamenezes.actions.runtime.RegisteredTool
@@ -20,13 +21,9 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
-/**
- * On-device intent model backed by LiteRT-LM + FunctionGemma/MobileActions.
- *
- * Tool execution is deliberately disabled inside LiteRT-LM. The model only
- * selects a function and extracts its arguments. The runtime executes the
- * resulting AndroidAction after policy evaluation.
- */
+private const val TAG = "ActionsFunctionGemma"
+
+/** Minimal on-device FunctionGemma proof-of-concept for Wi-Fi settings. */
 class LiteRtFunctionGemmaIntentModel(
     context: Context,
     modelPath: String,
@@ -39,6 +36,7 @@ class LiteRtFunctionGemmaIntentModel(
         EngineConfig(
             modelPath = modelPath,
             backend = Backend.CPU(),
+            maxNumTokens = 1024,
             cacheDir = context.applicationContext.cacheDir.absolutePath,
         )
     )
@@ -48,7 +46,9 @@ class LiteRtFunctionGemmaIntentModel(
         initMutex.withLock {
             if (!initialized) {
                 withContext(Dispatchers.Default) {
+                    Log.d(TAG, "Initializing LiteRT-LM engine")
                     engine.initialize()
+                    Log.d(TAG, "LiteRT-LM engine initialized")
                 }
                 initialized = true
             }
@@ -75,15 +75,21 @@ class LiteRtFunctionGemmaIntentModel(
 
         return withContext(Dispatchers.Default) {
             engine.createConversation(conversationConfig).use { conversation ->
+                Log.d(TAG, "Prompt: ${request.text}")
                 val response = conversation.sendMessage(request.text)
-                val toolCall = response.toolCalls.firstOrNull()
+                Log.d(TAG, "Response: $response")
+                Log.d(TAG, "Tool calls: ${response.toolCalls}")
 
+                val toolCall = response.toolCalls.firstOrNull()
                 if (toolCall == null) {
+                    Log.w(TAG, "No tool call recognized")
                     return@use ModelDecision.NoAction(response.toString())
                 }
 
+                Log.d(TAG, "Tool call name=${toolCall.name} args=${toolCall.arguments}")
                 val runtimeName = toolCall.name.toRuntimeToolName()
                 if (runtimeName !in allowedTools) {
+                    Log.w(TAG, "Tool unavailable in runtime: $runtimeName")
                     return@use ModelDecision.NoAction(
                         "Model requested unavailable tool: ${toolCall.name}"
                     )
@@ -91,7 +97,9 @@ class LiteRtFunctionGemmaIntentModel(
 
                 ModelDecision.ToolCall(
                     name = runtimeName,
-                    arguments = toolCall.arguments.mapValues { (_, value) -> value?.toString().orEmpty() },
+                    arguments = toolCall.arguments.mapValues { (_, value) ->
+                        value?.toString().orEmpty()
+                    },
                 )
             }
         }
@@ -110,33 +118,16 @@ class LiteRtFunctionGemmaIntentModel(
         val day = now.format(DateTimeFormatter.ofPattern("EEEE"))
 
         return Contents.of(
+            Content.Text("You are a model that can do function calling with the following functions"),
             Content.Text(
-                "You are an Android function-calling router. Select only a provided function. " +
-                    "Do not claim an action was executed. The Android runtime executes it after policy checks. " +
-                    "Prefer a constrained high-level skill such as searchYouTube when it exactly matches the user's goal. " +
-                    "Use low-level accessibility node tools only when no constrained skill matches, and read the UI tree before using node IDs."
+                "Current date and time given in YYYY-MM-DDTHH:MM:SS format: $dateTime\n" +
+                    "Day of week is $day"
             ),
-            Content.Text("Current local date and time: $dateTime. Day of week: $day."),
         )
     }
 
     private fun String.toRuntimeToolName(): String = when (this) {
-        "turnOnFlashlight" -> "flashlight_on"
-        "turnOffFlashlight" -> "flashlight_off"
-        "createContact" -> "create_contact"
-        "sendEmail" -> "send_email"
-        "showLocationOnMap" -> "show_location_on_map"
         "openWifiSettings" -> "open_wifi_settings"
-        "createCalendarEvent" -> "create_calendar_event"
-        "openApp" -> "open_app"
-        "openUrl" -> "open_url"
-        "dialNumber" -> "dial_number"
-        "searchYouTube" -> "youtube_search"
-        "readUiTree" -> "read_ui_tree"
-        "clickUiNode" -> "click_ui_node"
-        "setUiText" -> "set_ui_text"
-        "scrollUiForward" -> "scroll_ui_forward"
-        "accessibilityBack" -> "accessibility_back"
         else -> this
     }
 }
