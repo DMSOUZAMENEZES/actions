@@ -4,13 +4,6 @@ import com.google.ai.edge.litertlm.Tool
 import com.google.ai.edge.litertlm.ToolParam
 import com.google.ai.edge.litertlm.ToolSet
 
-/**
- * Tool schema exposed directly to FunctionGemma through the LiteRT-LM Kotlin API.
- *
- * automaticToolCalling remains disabled in the conversation because AndroidFunctionRuntime
- * owns policy checks and user confirmation. These methods therefore describe the callable
- * surface to the model; Android execution is performed by RuntimeToolCatalog/ActionDispatcher.
- */
 internal class FunctionGemmaTools : ToolSet {
 
     @Tool(description = "Open Android Wi-Fi settings.")
@@ -38,6 +31,14 @@ internal class FunctionGemmaTools : ToolSet {
     fun youtubeSearch(
         @ToolParam(description = "Text to search for on YouTube.")
         query: String,
+    ): Map<String, String> = pending()
+
+    @Tool(description = "Open WhatsApp and summarize one explicitly selected visible conversation. Reading private messages requires user confirmation.")
+    fun whatsappSummarizeConversation(
+        @ToolParam(description = "Optional contact or group name to search for. Leave empty only when a WhatsApp conversation is already open.")
+        conversation: String? = null,
+        @ToolParam(description = "Maximum number of visible text items to include. Use 30 by default.")
+        maxItems: Int = 30,
     ): Map<String, String> = pending()
 
     @Tool(description = "Read the currently active Android accessibility UI tree and return semantic node identifiers.")
