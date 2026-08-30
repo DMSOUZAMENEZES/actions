@@ -32,6 +32,7 @@ The runtime supports the MobileActions-270M function set plus runtime extensions
 - `open_app` — opens a launchable app by human-readable launcher label or package name.
 - `open_url` — opens an absolute URL.
 - `dial_number` — opens the dialer with the number filled in; confirmation required.
+- `whatsapp_summarize_conversation` — opens WhatsApp and summarizes one explicitly selected visible conversation; confirmation required because private communications are read.
 
 ## Accessibility runtime
 
@@ -73,6 +74,37 @@ Abra o YouTube e pesquise Google AI Edge
 
 FunctionGemma is instructed to prefer `youtube_search` over arbitrary low-level UI operations when the goal matches the constrained skill.
 
+## WhatsApp conversation summary test skill
+
+`whatsapp_summarize_conversation(conversation?, maxItems)` is a foreground-only read skill intended for testing the WhatsApp architecture without adding a second service or provider integration.
+
+Flow:
+
+```text
+User request
+   -> FunctionGemma selects whatsappSummarizeConversation
+   -> runtime maps to whatsapp_summarize_conversation
+   -> PolicyEngine requests confirmation (SENSITIVE)
+   -> open WhatsApp
+   -> optionally search the explicitly named contact/group
+   -> read visible text from the Accessibility tree
+   -> filter common WhatsApp chrome and duplicate text
+   -> build a compact local summary
+   -> return summary + visible_text in ActionResult.Success
+```
+
+The skill does not send, edit, delete or forward messages. It does not scan conversations in the background. If no `conversation` argument is supplied, a WhatsApp conversation must already be open.
+
+Example commands:
+
+```text
+Abra o WhatsApp e resuma a conversa com João
+Resuma a conversa do WhatsApp com Família
+Estou com uma conversa do WhatsApp aberta; faça um resumo
+```
+
+For this milestone the summary is deterministic and local so the feature can be tested without introducing another LLM. A later summarizer can consume the returned `visible_text` while keeping the same Android skill contract.
+
 ## Demo app
 
 The `app` module provides a Jetpack Compose test UI. It can import a `.litertlm` model through the Android document picker, copy it into app-private storage, request the camera permission used for flashlight actions, open Android Accessibility settings, run an on-device command, and retain the planned action while asking for confirmation when necessary.
@@ -106,8 +138,9 @@ The accessibility layer does not silently grant itself access. Android requires 
 ## Next milestones
 
 1. Stabilize CI and add unit/instrumentation coverage for accessibility snapshots and policy boundaries.
-2. Add a constrained WhatsApp `prepare_message` skill that stops before sending.
-3. Add a separate confirmation-gated `send_prepared_message` step.
-4. Add alarms, timers, sharing, media controls and read-only device-state tools.
-5. Add model download, integrity verification and device compatibility checks.
-6. Add a reusable Skill Engine and skill execution trace for multi-step automations.
+2. Validate `whatsapp_summarize_conversation` against current WhatsApp and WhatsApp Business accessibility trees on physical devices.
+3. Add a constrained WhatsApp `prepare_message` skill that stops before sending.
+4. Add a separate confirmation-gated `send_prepared_message` step.
+5. Add alarms, timers, sharing, media controls and read-only device-state tools.
+6. Add model download, integrity verification and device compatibility checks.
+7. Add a reusable Skill Engine and skill execution trace for multi-step automations.
