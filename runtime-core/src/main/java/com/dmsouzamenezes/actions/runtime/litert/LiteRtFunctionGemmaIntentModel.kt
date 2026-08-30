@@ -27,12 +27,14 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 private const val TAG = "ActionsFunctionGemma"
+private const val WHATSAPP_RUNTIME_TOOL = "whatsapp_summarize_conversation"
 
 class LiteRtFunctionGemmaIntentModel(
     context: Context,
     modelPath: String,
 ) : AgentIntentModel, AutoCloseable {
 
+    private val appContext = context.applicationContext
     private val initMutex = Mutex()
     private var initialized = false
 
@@ -41,7 +43,7 @@ class LiteRtFunctionGemmaIntentModel(
             modelPath = modelPath,
             backend = Backend.CPU(),
             maxNumTokens = 1024,
-            cacheDir = context.applicationContext.cacheDir.absolutePath,
+            cacheDir = appContext.cacheDir.absolutePath,
         )
     )
 
@@ -81,17 +83,29 @@ class LiteRtFunctionGemmaIntentModel(
             samplerConfig = SamplerConfig(topK = 64, topP = 0.95, temperature = 0.0),
         )
         val conversation = withContext(Dispatchers.Default) { engine.createConversation(config) }
-        return LiteRtAgentSession(conversation, allowedTools)
+        return LiteRtAgentSession(
+            engine = engine,
+            conversation = conversation,
+            allowedTools = allowedTools,
+            appContext = appContext,
+        )
     }
 
     private class LiteRtAgentSession(
+        private val engine: Engine,
         private val conversation: Conversation,
         private val allowedTools: Set<String>,
+        private val appContext: Context,
     ) : AgentModelSession {
         private var closed = false
         private var deterministicToolPending = false
 
         override suspend fun start(request: UserRequest): AgentModelTurn {
+            if (WHATSAPP_RUNTIME_TOOL in allowedTools && isWhatsAppSummaryRequest(request.text)) {
+                Log.d(TAG, "Using native LiteRT-LM automatic tool loop for WhatsApp")
+                return runNativeWhatsAppTurn(request.text)
+            }
+
             deterministicNativeRoute(request.text, allowedTools)?.let {
                 deterministicToolPending = true
                 Log.d(TAG, "Deterministic route: ${it.name} ${it.arguments}")
@@ -99,6 +113,31 @@ class LiteRtFunctionGemmaIntentModel(
             }
             return send(Message.user(request.text))
         }
+
+        private suspend fun runNativeWhatsAppTurn(text: String): AgentModelTurn =
+            withContext(Dispatchers.Default) {
+                check(!closed) { "Agent model session is already closed" }
+                val config = ConversationConfig(
+                    systemInstruction = Contents.of(
+                        Content.Text(
+                            "You are a local Android WhatsApp assistant. For any request to read or summarize WhatsApp messages, " +
+                                "you MUST call summarizeWhatsAppConversation. The tool is read-only and only reads text exposed " +
+                                "by the Android accessibility tree. Never claim messages were read when the tool reports failure. " +
+                                "After the tool returns success, answer in Portuguese with a concise useful summary based only on " +
+                                "the tool result. Do not invent messages or participants."
+                        )
+                    ),
+                    tools = listOf(tool(WhatsAppLiteRtTools(appContext))),
+                    automaticToolCalling = true,
+                    samplerConfig = SamplerConfig(topK = 16, topP = 0.9, temperature = 0.0),
+                )
+
+                engine.createConversation(config).use { nativeConversation ->
+                    val response = nativeConversation.sendMessage(Message.user(text))
+                    Log.d(TAG, "Native WhatsApp final response: $response")
+                    AgentModelTurn.Completed(cleanModelText(response.toString()))
+                }
+            }
 
         override suspend fun continueWithToolResult(
             modelToolName: String,
@@ -169,6 +208,13 @@ class LiteRtFunctionGemmaIntentModel(
     }
 }
 
+private fun isWhatsAppSummaryRequest(text: String): Boolean {
+    val normalized = Normalizer.normalize(text.lowercase(), Normalizer.Form.NFD)
+        .replace(Regex("\\p{M}+"), "")
+    return "whatsapp" in normalized &&
+        listOf("resum", "ler", "leia", "mensagen", "mensagem", "conversa").any { it in normalized }
+}
+
 private fun deterministicNativeRoute(
     text: String,
     allowedTools: Set<String>,
@@ -185,21 +231,6 @@ private fun deterministicNativeRoute(
         if (runtimeName in allowedTools) {
             AgentModelTurn.ToolCall(runtimeName, modelName, arguments)
         } else null
-
-    if ("whatsapp" in normalized &&
-        listOf("resum", "ler", "leia", "mensagen", "mensagem", "conversa").any { it in normalized }
-    ) {
-        val conversation = extractWhatsAppConversation(text)
-        val arguments = buildMap {
-            if (!conversation.isNullOrBlank()) put("conversation", conversation)
-            put("maxItems", "30")
-        }
-        return route(
-            "whatsapp_summarize_conversation",
-            "whatsappSummarizeConversation",
-            arguments,
-        )
-    }
 
     if (("wifi" in normalized || "wi-fi" in normalized) &&
         listOf("configur", "ajuste", "setting", "abr").any { it in normalized }
@@ -222,20 +253,6 @@ private fun deterministicNativeRoute(
     return null
 }
 
-private fun extractWhatsAppConversation(text: String): String? {
-    val patterns = listOf(
-        Regex("(?i)conversa\\s+(?:com|de)\\s+(.+)$"),
-        Regex("(?i)mensagens?\\s+(?:com|de|do|da)\\s+(.+)$"),
-        Regex("(?i)whatsapp\\s+(?:com|de|do|da)\\s+(.+)$"),
-    )
-    return patterns.firstNotNullOfOrNull { pattern ->
-        pattern.find(text)?.groupValues?.getOrNull(1)
-            ?.trim()
-            ?.trimEnd('.', '!', '?', ',', ';', ':')
-            ?.takeIf { it.isNotBlank() && it.length <= 120 }
-    }
-}
-
 private fun cleanModelText(raw: String): String = raw
     .replace(Regex("(?i)_?<escape>\\.?"), "")
     .replace(Regex("(?i)<escape>"), "")
@@ -251,7 +268,7 @@ private fun String.toRuntimeToolName(): String = when (this) {
     "openUrl" -> "open_url"
     "dialNumber" -> "dial_number"
     "youtubeSearch" -> "youtube_search"
-    "whatsappSummarizeConversation" -> "whatsapp_summarize_conversation"
+    "whatsappSummarizeConversation" -> WHATSAPP_RUNTIME_TOOL
     "readUiTree" -> "read_ui_tree"
     "clickUiNode" -> "click_ui_node"
     "setUiText" -> "set_ui_text"
