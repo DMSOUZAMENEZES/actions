@@ -1,109 +1,17 @@
 package com.dmsouzamenezes.actions.runtime.litert
 
 import com.google.ai.edge.litertlm.Tool
-import com.google.ai.edge.litertlm.ToolParam
 import com.google.ai.edge.litertlm.ToolSet
 
 /**
- * Tool schema exposed to FunctionGemma.
+ * Minimal FunctionGemma proof-of-concept.
  *
- * LiteRT-LM is configured with automaticToolCalling=false, so these methods are
- * schema carriers only. Android execution happens later through ToolRegistry,
- * PolicyEngine and ActionDispatcher.
+ * Only the Wi-Fi settings function is exposed to the model so the first
+ * end-to-end test matches the Google Mobile Actions tool definition as closely
+ * as possible. Android execution remains in the existing runtime dispatcher.
  */
 internal class FunctionGemmaTools : ToolSet {
 
-    @Tool(description = "Turns the flashlight on.")
-    fun turnOnFlashlight(): Map<String, String> = mapOf("result" to "pending")
-
-    @Tool(description = "Turns the flashlight off.")
-    fun turnOffFlashlight(): Map<String, String> = mapOf("result" to "pending")
-
-    @Tool(description = "Creates a contact in the phone's contact list.")
-    fun createContact(
-        @ToolParam(description = "The first name of the contact.") firstName: String,
-        @ToolParam(description = "The last name of the contact.") lastName: String,
-        @ToolParam(description = "The phone number of the contact.") phoneNumber: String,
-        @ToolParam(description = "The email address of the contact.") email: String,
-    ): Map<String, String> = mapOf(
-        "firstName" to firstName,
-        "lastName" to lastName,
-        "phoneNumber" to phoneNumber,
-        "email" to email,
-    )
-
-    @Tool(description = "Sends an email.")
-    fun sendEmail(
-        @ToolParam(description = "The email address of the recipient.") to: String,
-        @ToolParam(description = "The subject of the email.") subject: String,
-        @ToolParam(description = "The body of the email.") body: String,
-    ): Map<String, String> = mapOf("to" to to, "subject" to subject, "body" to body)
-
-    @Tool(description = "Shows a location on the map.")
-    fun showLocationOnMap(
-        @ToolParam(
-            description = "The location to search for. May be the name of a place, business or address."
-        )
-        location: String,
-    ): Map<String, String> = mapOf("location" to location)
-
-    @Tool(description = "Opens the Android Wi-Fi settings screen.")
+    @Tool(description = "Opens the WiFi settings.")
     fun openWifiSettings(): Map<String, String> = mapOf("result" to "pending")
-
-    @Tool(description = "Creates a new calendar event.")
-    fun createCalendarEvent(
-        @ToolParam(description = "Date and time in YYYY-MM-DDTHH:MM:SS format.") datetime: String,
-        @ToolParam(description = "The title of the event.") title: String,
-    ): Map<String, String> = mapOf("datetime" to datetime, "title" to title)
-
-    @Tool(description = "Opens an installed Android application by its human-readable app name or package name.")
-    fun openApp(
-        @ToolParam(
-            description = "Application name such as YouTube, WhatsApp or Chrome, or an Android package name."
-        )
-        appName: String,
-    ): Map<String, String> = mapOf("appName" to appName)
-
-    @Tool(description = "Opens a web URL in an Android application capable of handling it.")
-    fun openUrl(
-        @ToolParam(description = "Absolute URL including scheme, for example https://example.com.")
-        url: String,
-    ): Map<String, String> = mapOf("url" to url)
-
-    @Tool(description = "Opens the Android dialer with a phone number filled in. Does not place the call automatically.")
-    fun dialNumber(
-        @ToolParam(description = "Phone number to place in the dialer.")
-        phoneNumber: String,
-    ): Map<String, String> = mapOf("phoneNumber" to phoneNumber)
-
-    @Tool(description = "Opens YouTube and performs a search for the requested query using the constrained UI automation skill.")
-    fun searchYouTube(
-        @ToolParam(description = "The text to search for on YouTube.") query: String,
-    ): Map<String, String> = mapOf("query" to query)
-
-    @Tool(description = "Reads the currently visible Android accessibility UI tree and returns semantic node IDs.")
-    fun readUiTree(): Map<String, String> = mapOf("result" to "pending")
-
-    @Tool(description = "Clicks a visible Android UI element using a node ID returned by readUiTree.")
-    fun clickUiNode(
-        @ToolParam(description = "Semantic node ID such as 0.2.1 from readUiTree.") nodeId: String,
-        @ToolParam(description = "Optional human-readable label for the target element.") label: String? = null,
-    ): Map<String, String> = mapOf(
-        "nodeId" to nodeId,
-        "label" to label.orEmpty(),
-    )
-
-    @Tool(description = "Sets text in an editable Android UI element using a node ID returned by readUiTree.")
-    fun setUiText(
-        @ToolParam(description = "Semantic node ID such as 0.3.0 from readUiTree.") nodeId: String,
-        @ToolParam(description = "Text to enter into the UI field.") text: String,
-    ): Map<String, String> = mapOf("nodeId" to nodeId, "text" to text)
-
-    @Tool(description = "Scrolls a scrollable Android UI element forward using a node ID returned by readUiTree.")
-    fun scrollUiForward(
-        @ToolParam(description = "Semantic node ID of a scrollable element.") nodeId: String,
-    ): Map<String, String> = mapOf("nodeId" to nodeId)
-
-    @Tool(description = "Performs the Android Back action through the accessibility service.")
-    fun accessibilityBack(): Map<String, String> = mapOf("result" to "pending")
 }
