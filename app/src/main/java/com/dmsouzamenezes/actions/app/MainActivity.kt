@@ -36,11 +36,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import com.dmsouzamenezes.actions.runtime.ActionContext
+import com.dmsouzamenezes.actions.runtime.ActionResult
 import com.dmsouzamenezes.actions.runtime.AgentRunResult
 import com.dmsouzamenezes.actions.runtime.AndroidFunctionRuntimeSession
 import com.dmsouzamenezes.actions.runtime.FunctionGemmaRuntimeFactory
 import com.dmsouzamenezes.actions.runtime.PendingAgentRun
 import com.dmsouzamenezes.actions.runtime.accessibility.AccessibilityRuntimeBridge
+import com.dmsouzamenezes.actions.runtime.actions.OpenWifiSettingsAction
 import java.io.File
 import java.io.FileInputStream
 import kotlinx.coroutines.Dispatchers
@@ -76,6 +79,7 @@ private fun RuntimeDemoScreen() {
             else "Selecione o arquivo $MODEL_FILE_NAME"
         )
     }
+    var diagnostics by remember { mutableStateOf("Diagnóstico: aguardando teste.") }
     var busy by remember { mutableStateOf(false) }
     var modelReady by remember { mutableStateOf(modelFile.exists()) }
     var pendingAgent by remember { mutableStateOf<PendingAgentRun?>(null) }
@@ -99,6 +103,19 @@ private fun RuntimeDemoScreen() {
             is AgentRunResult.Completed -> {
                 pendingAgent = null
                 val steps = result.trace.size
+                val traceText = if (result.trace.isEmpty()) {
+                    "nenhuma ferramenta executada"
+                } else {
+                    result.trace.joinToString(" → ") { step ->
+                        val outcome = when (step.result) {
+                            is ActionResult.Success -> "OK"
+                            is ActionResult.ConfirmationRequired -> "CONFIRMAÇÃO"
+                            is ActionResult.Failure -> "FALHA"
+                        }
+                        "${step.tool}[$outcome]"
+                    }
+                }
+                diagnostics = "Trace: $traceText"
                 status = if (result.response.isBlank()) {
                     "Tarefa concluída em $steps etapa(s)."
                 } else {
@@ -107,10 +124,14 @@ private fun RuntimeDemoScreen() {
             }
             is AgentRunResult.ConfirmationRequired -> {
                 pendingAgent = result.pending
+                diagnostics = "Trace antes da confirmação: " +
+                    if (result.trace.isEmpty()) "nenhuma ferramenta concluída" else result.trace.joinToString(" → ") { it.tool }
                 status = "Confirmação necessária: ${result.summary}"
             }
             is AgentRunResult.Failure -> {
                 pendingAgent = null
+                diagnostics = "Falha do agente: ${result.code}; trace=" +
+                    if (result.trace.isEmpty()) "vazio" else result.trace.joinToString(" → ") { it.tool }
                 status = "Falha [${result.code}]: ${result.message}"
             }
         }
@@ -188,9 +209,11 @@ private fun RuntimeDemoScreen() {
                 session?.close()
                 session = null
                 modelReady = true
+                diagnostics = "Modelo: ${modelFile.length()} bytes; acessibilidade=${AccessibilityRuntimeBridge.isConnected}"
                 status = "Modelo importado e validado: $MODEL_FILE_NAME"
             }.onFailure {
                 modelReady = modelFile.exists()
+                diagnostics = "Falha de importação: ${it::class.java.simpleName}"
                 status = "Modelo rejeitado: ${it.message}"
             }
             busy = false
@@ -238,7 +261,23 @@ private fun RuntimeDemoScreen() {
         }
 
         Text(status, style = MaterialTheme.typography.bodySmall)
+        Text(diagnostics, style = MaterialTheme.typography.bodySmall)
         if (busy) LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+
+        OutlinedButton(
+            onClick = {
+                scope.launch {
+                    diagnostics = "Teste direto: executando OpenWifiSettingsAction sem LLM..."
+                    when (val result = OpenWifiSettingsAction.execute(ActionContext(context.applicationContext))) {
+                        is ActionResult.Success -> diagnostics = "Teste direto OK: Android abriu Wi-Fi. Runtime/Intent está funcional."
+                        is ActionResult.Failure -> diagnostics = "Teste direto FALHOU [${result.code}]: ${result.message}"
+                        is ActionResult.ConfirmationRequired -> diagnostics = "Teste direto inesperadamente pediu confirmação."
+                    }
+                }
+            },
+            enabled = !busy,
+            modifier = Modifier.fillMaxWidth(),
+        ) { Text("Teste direto: abrir Wi-Fi") }
 
         OutlinedTextField(
             value = prompt,
@@ -261,10 +300,12 @@ private fun RuntimeDemoScreen() {
                     pendingAgent = null
                     busy = true
                     status = "Agente executando no dispositivo..."
+                    diagnostics = "Inicializando/consultando FunctionGemma; modelo=${modelFile.length()} bytes; acessibilidade=${AccessibilityRuntimeBridge.isConnected}"
                     runCatching {
                         getOrCreateSession().runtime.runAgent(text = prompt, maxSteps = MAX_AGENT_STEPS)
                     }.onSuccess(::renderAgentResult).onFailure {
                         val detail = it.message.orEmpty()
+                        diagnostics = "Exceção ${it::class.java.simpleName}: $detail"
                         status = if (detail.contains("magic number", ignoreCase = true) || detail.contains("PK")) {
                             "Modelo inválido. Toque em Trocar modelo e selecione $MODEL_FILE_NAME (.litertlm), não um ZIP/APK."
                         } else {
@@ -299,7 +340,11 @@ private fun RuntimeDemoScreen() {
                             } else {
                                 runCatching { currentSession.runtime.resumeAgent(pending, confirmed = true) }
                                     .onSuccess(::renderAgentResult)
-                                    .onFailure { pending.close(); pendingAgent = null; status = "Erro ao continuar agente: ${it.message}" }
+                                    .onFailure {
+                                        pending.close(); pendingAgent = null
+                                        diagnostics = "Erro ao retomar: ${it::class.java.simpleName}: ${it.message}"
+                                        status = "Erro ao continuar agente: ${it.message}"
+                                    }
                             }
                             busy = false
                         }
