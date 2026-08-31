@@ -26,7 +26,6 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -68,11 +67,27 @@ private fun RuntimeDemoScreen() {
     val scope = rememberCoroutineScope()
     val modelFile = remember(context) { File(context.filesDir, ModelDownloader.MODEL_FILE_NAME) }
 
-    var prompt by remember { mutableStateOf("Abra o WhatsApp, leia a conversa e faça um resumo") }
-    var status by remember { mutableStateOf("Verificando modelo FunctionGemma...") }
-    var diagnostics by remember { mutableStateOf("Diagnóstico: inicializando.") }
+    var prompt by remember { mutableStateOf("Abra o WhatsApp, leia as mensagens da conversa com NOME e faça um resumo") }
+    var status by remember {
+        mutableStateOf(
+            if (ModelDownloader.isValidModel(modelFile)) {
+                "Modelo FunctionGemma instalado e validado."
+            } else {
+                "Modelo não instalado. Toque em IMPORTAR MODELO .LITERTLM."
+            }
+        )
+    }
+    var diagnostics by remember {
+        mutableStateOf(
+            if (ModelDownloader.isValidModel(modelFile)) {
+                "Modelo: ${modelFile.length()} bytes; acessibilidade=${AccessibilityRuntimeBridge.isConnected}"
+            } else {
+                "Arquivo necessário: mobile-actions_q8_ekv1024.litertlm (~284 MB)."
+            }
+        )
+    }
     var busy by remember { mutableStateOf(false) }
-    var downloadingModel by remember { mutableStateOf(false) }
+    var importingModel by remember { mutableStateOf(false) }
     var modelReady by remember { mutableStateOf(ModelDownloader.isValidModel(modelFile)) }
     var pendingAgent by remember { mutableStateOf<PendingAgentRun?>(null) }
     var session by remember { mutableStateOf<AndroidFunctionRuntimeSession?>(null) }
@@ -90,41 +105,35 @@ private fun RuntimeDemoScreen() {
         session = null
     }
 
-    suspend fun downloadModel(force: Boolean) {
-        downloadingModel = true
-        busy = true
-        modelReady = false
-        status = if (force) {
-            "Baixando novamente o FunctionGemma (~284 MB)..."
-        } else {
-            "Baixando FunctionGemma automaticamente (~284 MB)..."
-        }
-        diagnostics = "Fonte: LiteRT Community / mobile_actions_q8_ekv1024.litertlm"
-
-        runCatching {
-            ModelDownloader.ensureModel(context.applicationContext, force = force)
-        }.onSuccess { file ->
-            closeRuntimeSession()
-            modelReady = true
-            status = "Modelo pronto. O agente pode ser executado."
-            diagnostics = "Modelo validado: ${file.length()} bytes; acessibilidade=${AccessibilityRuntimeBridge.isConnected}"
-        }.onFailure { error ->
-            modelReady = ModelDownloader.isValidModel(modelFile)
-            status = "Falha ao baixar o modelo: ${error.message}"
-            diagnostics = "${error::class.java.simpleName}. Verifique internet e toque em Baixar modelo novamente."
+    val modelPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri == null) {
+            status = "Importação cancelada."
+            return@rememberLauncherForActivityResult
         }
 
-        downloadingModel = false
-        busy = false
-    }
+        scope.launch {
+            importingModel = true
+            busy = true
+            status = "Importando e validando o modelo..."
+            diagnostics = "Copiando o arquivo selecionado para o armazenamento privado do app."
 
-    LaunchedEffect(Unit) {
-        if (ModelDownloader.isValidModel(modelFile)) {
-            modelReady = true
-            status = "Modelo FunctionGemma encontrado e validado."
-            diagnostics = "Modelo: ${modelFile.length()} bytes; acessibilidade=${AccessibilityRuntimeBridge.isConnected}"
-        } else {
-            downloadModel(force = false)
+            runCatching {
+                ModelImporter.importModel(context.applicationContext, uri)
+            }.onSuccess { file ->
+                closeRuntimeSession()
+                modelReady = true
+                status = "Modelo importado com sucesso. O agente pode ser executado."
+                diagnostics = "Modelo validado: ${file.length()} bytes; acessibilidade=${AccessibilityRuntimeBridge.isConnected}"
+            }.onFailure { error ->
+                modelReady = ModelDownloader.isValidModel(modelFile)
+                status = "Falha ao importar o modelo: ${error.message}"
+                diagnostics = "${error::class.java.simpleName}. Selecione o arquivo .litertlm correto, com aproximadamente 284 MB."
+            }
+
+            importingModel = false
+            busy = false
         }
     }
 
@@ -193,20 +202,22 @@ private fun RuntimeDemoScreen() {
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         Text("Android Function Agent", style = MaterialTheme.typography.headlineMedium)
-        Text("LiteRT-LM + FunctionGemma 270M. O modelo é baixado automaticamente e executado no dispositivo.")
+        Text("LiteRT-LM + FunctionGemma 270M. O modelo é importado uma única vez e depois executado localmente no dispositivo.")
 
-        if (downloadingModel) {
+        if (importingModel) {
             LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-            Text("Download automático em andamento. Não feche o aplicativo.", style = MaterialTheme.typography.bodySmall)
+            Text("Importação em andamento. Não feche o aplicativo.", style = MaterialTheme.typography.bodySmall)
         }
 
         OutlinedButton(
-            onClick = { scope.launch { downloadModel(force = true) } },
+            onClick = { modelPickerLauncher.launch(arrayOf("*/*")) },
             enabled = !busy,
             modifier = Modifier.fillMaxWidth(),
         ) {
-            Text(if (modelReady) "Baixar modelo novamente" else "Tentar baixar modelo novamente")
+            Text(if (modelReady) "SUBSTITUIR MODELO .LITERTLM" else "IMPORTAR MODELO .LITERTLM")
         }
+
+        Text("Arquivo esperado: mobile-actions_q8_ekv1024.litertlm (~284 MB)", style = MaterialTheme.typography.bodySmall)
 
         if (!cameraGranted) {
             OutlinedButton(
@@ -257,7 +268,7 @@ private fun RuntimeDemoScreen() {
             onClick = {
                 scope.launch {
                     if (!ModelDownloader.isValidModel(modelFile)) {
-                        status = "O modelo ainda não está pronto."
+                        status = "Importe primeiro o modelo .litertlm."
                         return@launch
                     }
                     pendingAgent?.close()
@@ -321,6 +332,9 @@ private fun RuntimeDemoScreen() {
         }
 
         Spacer(modifier = Modifier.height(4.dp))
-        Text("Modelo automático: ${ModelDownloader.MODEL_FILE_NAME}", style = MaterialTheme.typography.bodySmall)
+        Text(
+            if (modelReady) "Modelo local: ${ModelDownloader.MODEL_FILE_NAME}" else "Modelo local: não instalado",
+            style = MaterialTheme.typography.bodySmall,
+        )
     }
 }
